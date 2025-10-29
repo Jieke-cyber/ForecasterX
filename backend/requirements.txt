@@ -1,4 +1,9 @@
 fastapi
 uvicorn[standard]
 pydantic
+sqlalchemy
 pandas
+python-multipart
+psycopg2-binary
+python-dotenv
+supabase
