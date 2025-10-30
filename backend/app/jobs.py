@@ -1,4 +1,6 @@
 # app/jobs.py
+import logging
+logger = logging.getLogger(__name__)
 import os
 import io
 import uuid
@@ -8,6 +10,7 @@ from .models import TrainingRun, ForecastPlot
 from .services import read_ts_for_training
 from .db import SessionLocal
 from .supa import supa
+from autots import AutoTS
 
 BUCKET_PLOTS = os.getenv("SUPABASE_BUCKET_PLOTS", "plots")
 
@@ -34,7 +37,7 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
 
         # 2) calcola forecast
         try:
-            from autots import AutoTS
+
             model = AutoTS(forecast_length=horizon, frequency="infer", ensemble="simple")
             model = model.fit(df, date_col="ds", value_col="value")
             prediction = model.predict()
@@ -43,6 +46,7 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
             yhat.columns = ["ds", "yhat"]
             metrics = {"note": "AutoTS"}
         except Exception:
+            logger.exception("❌ AutoTS fallito:")
             yhat = naive_forecast(df, horizon)
             metrics = {"note": "naive"}
 
