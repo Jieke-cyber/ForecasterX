@@ -1,8 +1,10 @@
 # app/main.py
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import uuid
 import os
@@ -15,7 +17,25 @@ from .services import save_csv
 from .jobs import train_job
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
+from cleanlab.outlier import OutOfDistribution
+from pypots.imputation.lerp.model import Lerp
 app = FastAPI(title="TS WebApp Backend (MVP)")
+
+def upload_to_bucket(key: str, data: bytes, bucket: str):
+    client = supa()
+    client.storage.from_(bucket).upload(
+        path=key,
+        file=data,
+        file_options={
+            "content-type": "text/csv",
+            "upsert": "true",   # 👈 deve essere STRINGA, non bool
+        },
+    )
+
+def download_from_bucket(key: str, bucket: str) -> bytes:
+    client = supa()
+    # supabase-py qui ti restituisce direttamente i bytes
+    return client.storage.from_(bucket).download(key)
 
 # CORS per sviluppo (React su 5173)
 app.add_middleware(
@@ -27,6 +47,70 @@ app.add_middleware(
 )
 
 Base.metadata.create_all(bind=engine)
+
+class TrainRequest(BaseModel):
+    dataset_id: str
+    horizon: int | None = None
+    model_name: str | None = None
+
+# 👇 NEW: schema per l’outlier detector
+class CleanOutliersBody(BaseModel):
+    chunk: int = 100
+    threshold: float = 0.000001
+    new_name: str | None = None
+
+# 👇 NEW: schema per l’imputazione
+class ImputeBody(BaseModel):
+    new_name: str | None = None
+
+# ============================================================
+# 👇 NEW: helper riutilizzabili
+# ============================================================
+def _load_dataset_as_df(db: Session, dataset_id: str) -> tuple[pd.DataFrame, Dataset]:
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    csv_bytes = download_from_bucket(dataset.path, bucket=SUPABASE_BUCKET)
+    df = pd.read_csv(io.BytesIO(csv_bytes))
+
+    # normalizza colonne → ds,value
+    rename_map = {}
+    for cand in ["ds", "date", "Date", "timestamp", "Timestamp"]:
+        if cand in df.columns:
+            rename_map[cand] = "ds"
+            break
+    for cand in ["value", "Value", "y"]:
+        if cand in df.columns:
+            rename_map[cand] = "value"
+            break
+
+    df = df.rename(columns=rename_map)
+
+    if "ds" not in df.columns or "value" not in df.columns:
+        raise HTTPException(400, "CSV must contain time and value columns")
+
+    df["ds"] = pd.to_datetime(df["ds"])
+    df = df.sort_values("ds").reset_index(drop=True)
+
+    return df, dataset
+
+
+def _create_new_dataset_row(db: Session, name: str, path: str) -> Dataset:
+    new_id = str(uuid.uuid4())      # 👈 lo facciamo stringa noi
+    new_ds = Dataset(
+        id=new_id,
+        name=name,
+        path=path,
+    )
+    db.add(new_ds)
+    db.commit()
+    # 👇 NON facciamo db.refresh(new_ds) perché SQLAlchemy lo rileggerebbe come UUID
+    return new_ds
 
 @app.get("/")
 def root():
@@ -276,3 +360,87 @@ def list_plots(
 @app.get("/plots/recent")
 def list_recent_plots(db: Session = Depends(get_db)):
     return list_plots(limit=10, db=db)
+
+from cleanlab.outlier import OutOfDistribution
+
+@app.post("/datasets/{dataset_id}/clean-outliers")
+def clean_outliers_on_dataset(
+    dataset_id: str,
+    body: CleanOutliersBody,
+    db: Session = Depends(get_db),
+):
+    # 1. l’utente ha scelto il dataset
+    df, dataset = _load_dataset_as_df(db, dataset_id)
+
+    n = len(df)
+    y = df["value"].astype(float).to_numpy()
+    outlier_mask_all = np.zeros(n, dtype=bool)
+
+    # 2. scan a blocchi
+    for start in range(0, n, body.chunk):
+        end = min(start + body.chunk, n)
+        seg = y[start:end].reshape(-1, 1)
+        if (end - start) < 3:
+            continue
+
+        ood = OutOfDistribution()
+        scores_seg = ood.fit_score(features=seg)
+
+        mask_seg = scores_seg < body.threshold
+        outlier_mask_all[start:end] = mask_seg
+
+    # 3. metto NaN solo dove c’è outlier
+    df.loc[outlier_mask_all, "value"] = np.nan
+
+    # 4. salvo nuovo CSV NEL TUO BUCKET
+    cleaned_key = f"{dataset.id}_cleaned.csv"
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    upload_to_bucket(cleaned_key, buf.getvalue().encode("utf-8"), bucket=SUPABASE_BUCKET)
+
+    # 5. nuova riga in datasets
+    cleaned_name = body.new_name or f"{dataset.name} (cleaned)"
+    new_ds = _create_new_dataset_row(db, cleaned_name, cleaned_key)
+
+    return {
+        "original_dataset_id": str(dataset.id),
+        "cleaned_dataset_id": str(new_ds.id),
+        "outliers_found": int(outlier_mask_all.sum()),
+    }
+
+from pypots.imputation.lerp.model import Lerp
+
+@app.post("/datasets/{dataset_id}/impute-linear")
+def impute_dataset_with_lerp(
+    dataset_id: str,
+    body: ImputeBody | None = None,
+    db: Session = Depends(get_db),
+):
+    # 1. l’utente sceglie il dataset
+    df, dataset = _load_dataset_as_df(db, dataset_id)
+
+    # 2. preparo i dati in 3D per PyPots
+    values = df["value"].to_numpy(dtype=float)
+    X = values.reshape(1, -1, 1)  # [1, n_steps, 1]
+    data_dict = {"X": X}
+
+    imputer = Lerp()
+    result = imputer.predict(data_dict)
+    imputed = result["imputation"].reshape(-1)
+
+    # 3. metto i valori imputati nel df
+    df["value"] = imputed
+
+    # 4. salvo nuovo CSV nel TUO bucket
+    imputed_key = f"{dataset.id}_imputed.csv"
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    upload_to_bucket(imputed_key, buf.getvalue().encode("utf-8"), bucket=SUPABASE_BUCKET)
+
+    imputed_name = body.new_name if body and body.new_name else f"{dataset.name} (imputed)"
+    new_ds = _create_new_dataset_row(db, imputed_name, imputed_key)
+
+    return {
+        "original_dataset_id": str(dataset.id),
+        "imputed_dataset_id": str(new_ds.id),
+    }
