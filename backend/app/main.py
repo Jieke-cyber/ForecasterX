@@ -3,8 +3,11 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Security, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError, jwt
 from starlette.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 import uuid
 import os
@@ -19,7 +22,30 @@ from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bu
 
 from cleanlab.outlier import OutOfDistribution
 from pypots.imputation.lerp.model import Lerp
+
+from .models import User
+from .auth_utils import hash_password, verify_password, create_access_token
+
+from .auth_utils import SECRET_KEY, ALGORITHM
 app = FastAPI(title="TS WebApp Backend (MVP)")
+
+security = HTTPBearer()
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    db: Session = Depends(get_db),
+):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
 
 def upload_to_bucket(key: str, data: bytes, bucket: str):
     client = supa()
@@ -62,6 +88,14 @@ class CleanOutliersBody(BaseModel):
 # 👇 NEW: schema per l’imputazione
 class ImputeBody(BaseModel):
     new_name: str | None = None
+
+class RegisterBody(BaseModel):
+    email: EmailStr
+    password: str
+
+class LoginBody(BaseModel):
+    email: EmailStr
+    password: str
 
 # ============================================================
 # 👇 NEW: helper riutilizzabili
@@ -190,7 +224,7 @@ def recent_plots(limit: int = 10, db: Session = Depends(get_db)):
     ]
 
 @app.get("/datasets")
-def list_datasets(db: Session = Depends(get_db)):
+def list_datasets(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     """
     Restituisce l'elenco dei dataset caricati (metadati, non i dati).
     Serve al frontend per riempire una tabella/select.
@@ -444,3 +478,31 @@ def impute_dataset_with_lerp(
         "original_dataset_id": str(dataset.id),
         "imputed_dataset_id": str(new_ds.id),
     }
+
+@app.post("/auth/register")
+def register(body: RegisterBody, db: Session = Depends(get_db)):
+    # controlla se esiste già
+    existing = db.query(User).filter(User.email == body.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=body.email,
+        password_hash=hash_password(body.password),
+    )
+    db.add(user)
+    db.commit()
+    return {"message": "registered"}
+
+@app.post("/auth/login")
+def login(body: LoginBody, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    token = create_access_token({"sub": user.id, "email": user.email})
+    return {"access_token": token, "token_type": "bearer"}

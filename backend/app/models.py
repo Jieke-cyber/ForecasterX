@@ -32,10 +32,11 @@ class ForecastPlot(Base):
 
     run = relationship("TrainingRun", backref="plots")
 
-    class User(Base):
-        __tablename__ = "users"
 
-        id = Column(String, primary_key=True)  # come i tuoi dataset: stringa
-        email = Column(String, unique=True, index=True, nullable=False)
-        password_hash = Column(String, nullable=False)
-        created_at = Column(DateTime, server_default=func.now())
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True)  # come i tuoi dataset: stringa
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
