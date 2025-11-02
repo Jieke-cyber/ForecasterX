@@ -1,11 +1,12 @@
 # app/auth_utils.py
+import os
 import uuid
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import jwt
 
 # chiave segreta → mettila in .env !!
-SECRET_KEY = "SUPER-SEGRETO-CAMBIAMI"
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 giorno
 
