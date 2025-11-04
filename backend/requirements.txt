@@ -12,3 +12,6 @@ cleanlab
 pypots
 python-jose[cryptography]
 passlib[bcrypt]
+email-validator
+passlib>=1.7.4
+argon2-cffi>=23.1.0
