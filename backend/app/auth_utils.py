@@ -8,9 +8,9 @@ from jose import jwt
 # chiave segreta → mettila in .env !!
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 giorno
+ACCESS_TOKEN_EXPIRE_MINUTES = 1  # 1 giorno
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
