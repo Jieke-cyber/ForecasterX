@@ -1,3 +1,5 @@
+console.log("API base:", import.meta.env.VITE_API_BASE);
+
 import axios from "axios";
 
 const api = axios.create({
