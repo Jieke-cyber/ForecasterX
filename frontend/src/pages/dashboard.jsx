@@ -1,34 +1,50 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import api from "../lib/api.js";
+import { useAuth } from "../context/AuthContext.jsx";
+import DatasetsTable from "../components/DatasetsTable.jsx";
 
-export default function DatasetsTable({ items, onClean, onImpute }) {
+export default function Dashboard() {
+  const { logout, user } = useAuth();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/datasets");
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setMsg(e?.response?.data?.detail ?? "Errore nel caricamento");
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const onClean = async (id) => {
+    setMsg(null);
+    try { await api.post(`/datasets/${id}/clean-outliers`); setMsg("Pulizia outlier avviata/completata"); load(); }
+    catch (e) { setMsg(e?.response?.data?.detail ?? "Errore pulizia outlier"); }
+  };
+
+  const onImpute = async (id) => {
+    setMsg(null);
+    try { await api.post(`/datasets/${id}/impute`); setMsg("Imputazione completata"); load(); }
+    catch (e) { setMsg(e?.response?.data?.detail ?? "Errore imputazione"); }
+  };
+
   return (
-    <div style={{overflowX:"auto", border:"1px solid #eee", borderRadius:12}}>
-      <table style={{minWidth:600, width:"100%", borderCollapse:"collapse"}}>
-        <thead>
-          <tr>
-            <th style={{textAlign:"left", padding:8}}>ID</th>
-            <th style={{textAlign:"left", padding:8}}>Nome</th>
-            <th style={{textAlign:"left", padding:8}}>Creato</th>
-            <th style={{textAlign:"left", padding:8}}>Azioni</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(d => (
-            <tr key={d.id} style={{borderTop:"1px solid #eee"}}>
-              <td style={{padding:8}}>{d.id}</td>
-              <td style={{padding:8}}>{d.name ?? "—"}</td>
-              <td style={{padding:8}}>{d.created_at ? new Date(d.created_at).toLocaleString() : "—"}</td>
-              <td style={{padding:8}}>
-                <button onClick={()=>onClean(d.id)}>Clean outliers</button>
-                <button onClick={()=>onImpute(d.id)} style={{marginLeft:8}}>Impute</button>
-              </td>
-            </tr>
-          ))}
-          {items.length === 0 && (
-            <tr><td style={{padding:8}} colSpan="4">Nessun dataset</td></tr>
-          )}
-        </tbody>
-      </table>
+    <div style={{padding:16}}>
+      <header style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <h1>Dashboard</h1>
+        <div style={{display:"flex", alignItems:"center", gap:12}}>
+          <span style={{fontSize:12, color:"#666"}}>{user?.email}</span>
+          <button onClick={logout}>Logout</button>
+        </div>
+      </header>
+
+      {msg && <div style={{marginTop:12, border:"1px solid #eee", padding:8, borderRadius:8}}>{msg}</div>}
+      {loading ? <p>Caricamento…</p> : <DatasetsTable items={items} onClean={onClean} onImpute={onImpute} />}
     </div>
   );
 }
