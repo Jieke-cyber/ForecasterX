@@ -5,7 +5,7 @@ from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPExc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Security, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+from jose import JWTError, jwt, ExpiredSignatureError, JOSEError
 from starlette.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
@@ -37,14 +37,25 @@ def get_current_user(
 ):
     token = credentials.credentials
     try:
+        # leeway (facoltativo) per tollerare piccoli sfasamenti di orologio
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=401,
+            detail="Token expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except (JWTError, JOSEError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
+    user_id = payload.get("sub")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(401, "User not found", headers={"WWW-Authenticate": "Bearer"})
     return user
 
 def upload_to_bucket(key: str, data: bytes, bucket: str):
@@ -79,7 +90,7 @@ class TrainRequest(BaseModel):
     horizon: int | None = None
     model_name: str | None = None
 
-# 👇 NEW: schema per l’outlier detector
+# 👇 NEW: schema per l’outliegetr detector
 class CleanOutliersBody(BaseModel):
     chunk: int = 100
     threshold: float = 0.000001
