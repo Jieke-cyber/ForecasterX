@@ -10,6 +10,7 @@ class Dataset(Base):
     path = Column(String, nullable=False)       # percorso del CSV su disco/bucket
     created_at = Column(DateTime, server_default=func.now())
     # (niente 'points' qui)
+    owner_email = Column(String, nullable=False, index=True)  # <— nuovo campo
 
 class TrainingRun(Base):
     __tablename__ = "training_runs"
