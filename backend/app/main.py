@@ -145,12 +145,13 @@ def _load_dataset_as_df(db: Session, dataset_id: str) -> tuple[pd.DataFrame, Dat
     return df, dataset
 
 
-def _create_new_dataset_row(db: Session, name: str, path: str) -> Dataset:
+def _create_new_dataset_row(db: Session, name: str, path: str, current_user = Depends(get_current_user)) -> Dataset:
     new_id = str(uuid.uuid4())      # 👈 lo facciamo stringa noi
     new_ds = Dataset(
         id=new_id,
         name=name,
         path=path,
+        owner_email=current_user.email,
     )
     db.add(new_ds)
     db.commit()
@@ -166,8 +167,8 @@ def health():
     return {"ok": True}
 
 @app.post("/datasets/upload")
-def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    ds_id = save_csv(db, file)
+def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(get_current_user),):
+    ds_id = save_csv(db, file, owner_email=current_user.email)  # <-- passa l’owner
     return {"dataset_id": ds_id}
 
 
@@ -235,26 +236,26 @@ def recent_plots(limit: int = 10, db: Session = Depends(get_db)):
     ]
 
 @app.get("/datasets")
-def list_datasets(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+def list_datasets(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
     """
-    Restituisce l'elenco dei dataset caricati (metadati, non i dati).
-    Serve al frontend per riempire una tabella/select.
+    Restituisce SOLO i dataset dell'utente loggato.
     """
     rows = (
         db.query(Dataset)
+        .filter(Dataset.owner_email == current_user.email)  # << filtro per utente
         .order_by(Dataset.created_at.desc())
         .all()
     )
     return [
         {
-            "id": r.id,
             "name": r.name,
-            "path": r.path,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }
         for r in rows
     ]
-
 
 @app.get("/datasets/{dataset_id}/data")
 def get_dataset_data(dataset_id: str, db: Session = Depends(get_db)):

@@ -10,10 +10,10 @@ from .supa import supa, SUPABASE_URL  # <-- nuovo
 
 BUCKET = os.getenv("SUPABASE_BUCKET", "datasets")
 
-def save_csv(db: Session, file: UploadFile) -> str:
+def save_csv(db: Session, file: UploadFile, owner_email: str) -> str:
     """
-    Carica il CSV su Supabase Storage (bucket) e registra una riga in datasets
-    con (id, name, path=<object_key>). Restituisce dataset_id.
+    Carica il CSV su Supabase Storage e registra una riga in 'datasets'
+    con (id, name, path, owner_email). Restituisce dataset_id.
     """
     fname = (file.filename or "").lower()
     if not fname.endswith(".csv"):
@@ -23,7 +23,7 @@ def save_csv(db: Session, file: UploadFile) -> str:
     if not content:
         raise HTTPException(400, "File vuoto")
 
-    # sanity check: deve essere leggibile come CSV
+    # sanity check: leggibilità CSV
     try:
         pd.read_csv(io.BytesIO(content), nrows=3)
     except Exception:
@@ -32,15 +32,15 @@ def save_csv(db: Session, file: UploadFile) -> str:
     ds_id = str(uuid.uuid4())
     object_key = f"{ds_id}.csv"
 
-    # upload su Supabase Storage
     client = supa()
     try:
+        # supabase-py: upload(bytes) → ok
         client.storage.from_(BUCKET).upload(path=object_key, file=content)
     except Exception as e:
         raise HTTPException(500, f"Upload su Supabase fallito: {e}")
 
-    # Salva in DB la CHIAVE dell’oggetto nel bucket (non l'URL)
-    db.add(Dataset(id=ds_id, name=file.filename, path=object_key))
+    # registra nel DB includendo il proprietario
+    db.add(Dataset(id=ds_id, name=file.filename, path=object_key, owner_email=owner_email))
     db.commit()
     return ds_id
 
