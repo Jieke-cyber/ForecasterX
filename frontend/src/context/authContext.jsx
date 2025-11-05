@@ -6,45 +6,52 @@ import { useNavigate } from "react-router-dom";
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(localStorage.getItem("token"));
+  const [token, setToken] = useState(() => localStorage.getItem("token"));
   const [user, setUser] = useState(null);
   const navigate = useNavigate();
 
   const logout = () => {
-    localStorage.removeItem("token");
+    try { localStorage.removeItem("token"); } catch {}
     setToken(null);
     setUser(null);
-    navigate("/login");
+    navigate("/login", { replace: true });
   };
 
-  const login = (newToken) => {
-    localStorage.setItem("token", newToken);
-    setToken(newToken);
+  // chiamala SOLO quando hai un token valido dalla /auth/login
+  const loginWithToken = (tk) => {
+    if (!tk || typeof tk !== "string") {
+      // niente token → niente navigate, niente crash
+      return;
+    }
+    try { localStorage.setItem("token", tk); } catch {}
+    setToken(tk);
     try {
-      const payload = jwtDecode(newToken);
+      const payload = jwtDecode(tk);
       setUser({ email: payload?.email });
     } catch {
+      // token non decodificabile: non crashare
       setUser(null);
     }
-    navigate("/");
+    navigate("/", { replace: true });
   };
 
-  // logout automatico alla scadenza
+  // logout automatico alla scadenza (best-effort, senza crash)
   useEffect(() => {
     if (!token) return;
     try {
       const { exp } = jwtDecode(token) || {};
       if (!exp) return;
       const ms = exp * 1000 - Date.now();
-      if (ms <= 0) return logout();
+      if (ms <= 0) { logout(); return; }
       const t = setTimeout(logout, ms);
       return () => clearTimeout(t);
     } catch {
+      // token non valido → esci silenziosamente
       logout();
     }
   }, [token]);
 
-  // intercetta 401 -> logout
+  // intercetta 401 → logout (senza rompere UI)
   useEffect(() => {
     const id = api.interceptors.response.use(
       (r) => r,
@@ -56,7 +63,7 @@ export function AuthProvider({ children }) {
     return () => api.interceptors.response.eject(id);
   }, []);
 
-  const value = useMemo(() => ({ token, user, login, logout }), [token, user]);
+  const value = useMemo(() => ({ token, user, loginWithToken, logout }), [token, user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
