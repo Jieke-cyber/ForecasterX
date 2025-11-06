@@ -21,19 +21,41 @@ export default function Dashboard() {
     } finally { setLoading(false); }
   };
 
+  const asMsg = (e, fallback) => {
+  const d = e?.response?.data;
+  const detail = d?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length) return detail[0]?.message || detail[0]?.msg || fallback;
+  if (typeof d === "string") return d;
+  if (typeof detail === "object") return JSON.stringify(detail);
+  if (typeof d === "object") return JSON.stringify(d);
+  return fallback;
+};
   useEffect(() => { load(); }, []);
 
   const onClean = async (id) => {
-    setMsg(null);
-    try { await api.post(`/datasets/${id}/clean-outliers`); setMsg("Pulizia outlier completata"); load(); }
-    catch (e) { setMsg(e?.response?.data?.detail ?? "Errore pulizia outlier"); }
-  };
+  if (!id) return setMsg("ID mancante.");
+  setMsg(null);
+  try {
+    await api.post(`/datasets/${id}/clean-outliers`, {});
+    setMsg("Pulizia outlier completata");
+    load();
+  } catch (e) {
+    setMsg(asMsg(e, "Errore pulizia outlier"));
+  }
+};
 
-  const onImpute = async (id) => {
-    setMsg(null);
-    try { await api.post(`/datasets/${id}/impute-linear`); setMsg("Imputazione completata"); load(); }
-    catch (e) { setMsg(e?.response?.data?.detail ?? "Errore imputazione"); }
-  };
+const onImpute = async (id) => {
+  if (!id) return setMsg("ID mancante.");
+  setMsg(null);
+  try {
+    await api.post(`/datasets/${id}/impute-linear`); // o /impute
+    setMsg("Imputazione completata");
+    load();
+  } catch (e) {
+    setMsg(asMsg(e, "Errore imputazione"));
+  }
+};
 
   return (
     <div style={{ padding:16 }}>
