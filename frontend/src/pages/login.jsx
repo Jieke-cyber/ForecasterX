@@ -52,7 +52,7 @@ export default function Login() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+    <div className="center-screen" style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
       {/* 👇 disattiva validazione nativa del browser */}
       <form noValidate onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12, border: "1px solid #ddd", padding: 16, borderRadius: 12 }}>
         <h1 style={{ margin: 0 }}>Accedi</h1>

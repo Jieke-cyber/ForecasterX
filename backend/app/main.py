@@ -251,6 +251,7 @@ def list_datasets(
     )
     return [
         {
+            "id": r.id,
             "name": r.name,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         }

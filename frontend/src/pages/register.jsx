@@ -63,7 +63,7 @@ export default function Register() {
 
   if (ok) {
     return (
-      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+      <div className="center-screen" style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
         <div style={{ width: 320, display: "grid", gap: 12, border: "1px solid #ddd", padding: 16, borderRadius: 12 }}>
           <h1 style={{ margin: 0 }}>Registrazione riuscita 🎉</h1>
           <button onClick={() => navigate("/login")}>Vai al login</button>
@@ -73,7 +73,7 @@ export default function Register() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+    <div className="center-screen" style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
       {/* 👇 disattiva la validazione nativa del browser */}
       <form noValidate onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12, border: "1px solid #ddd", padding: 16, borderRadius: 12 }}>
         <h1 style={{ margin: 0 }}>Registrati</h1>
