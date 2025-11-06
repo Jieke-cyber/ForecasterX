@@ -6,7 +6,7 @@ import pandas as pd
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 from .models import Dataset
-from .supa import supa, SUPABASE_URL  # <-- nuovo
+from .supa import supa, SUPABASE_URL, SUPABASE_BUCKET  # <-- nuovo
 
 BUCKET = os.getenv("SUPABASE_BUCKET", "datasets")
 
@@ -81,3 +81,61 @@ def read_ts_for_training(db: Session, dataset_id: str) -> pd.DataFrame:
     if df.empty:
         raise HTTPException(400, "Nessun dato valido dopo la conversione delle date")
     return df
+
+def _norm_email(v: str) -> str:
+    return str(v).strip().lower()
+
+def delete_csv(db: Session, dataset_id: str, owner_email: str) -> None:
+    """
+    Complementare di save_csv:
+    - verifica che il dataset esista e sia dell'owner
+    - elimina il file CSV da Storage (usando ds.path)
+    - elimina la riga dal DB
+    """
+    owner = _norm_email(owner_email)
+
+    ds = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id, Dataset.owner_email == owner)
+        .first()
+    )
+    if not ds:
+        raise HTTPException(404, "Dataset non trovato")
+
+    if not BUCKET:
+        raise HTTPException(500, "Config mancante: SUPABASE_BUCKET")
+
+    # ⚠️ Nel tuo modello la key è ds.path (es. "630f8... .csv")
+    object_key = (ds.path or "").strip()
+
+    if not object_key:
+        # niente file associato → elimina comunque la riga
+        db.delete(ds)
+        db.commit()
+        return
+
+    client = supa()
+    storage = client.storage.from_(BUCKET)
+
+    # (facoltativo ma utile) verifica che il file esista davvero, come fai nel GET
+    base = object_key.rsplit("/", 1)[0] if "/" in object_key else ""
+    try:
+        entries = storage.list(path=base) or []
+    except Exception as e:
+        raise HTTPException(500, f"Errore nel list dello storage: {e}")
+
+    filename = object_key.split("/")[-1]
+    exists = any(it.get("name") == filename for it in entries)
+    if not exists:
+        # scegli tu: 404 per evitare incoerenze
+        raise HTTPException(404, f"CSV non trovato in storage: {BUCKET}/{object_key}")
+
+    # elimina il file (coerenza forte: se fallisce, non tocchiamo il DB)
+    try:
+        storage.remove([object_key])
+    except Exception as e:
+        raise HTTPException(409, f"Rimozione CSV fallita: {e}")
+
+    # ora elimina la riga DB
+    db.delete(ds)
+    db.commit()

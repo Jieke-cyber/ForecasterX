@@ -1,7 +1,7 @@
 # app/main.py
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Security, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -16,7 +16,7 @@ import io
 from .db import Base, engine, get_db
 from .models import Dataset, TrainingRun, ForecastPlot
 from .schemas import TrainRequest, JobStatus
-from .services import save_csv
+from .services import save_csv, delete_csv
 from .jobs import train_job
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
@@ -417,7 +417,9 @@ def clean_outliers_on_dataset(
     dataset_id: str,
     body: CleanOutliersBody,
     db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
+    email = str(current_user.email).strip().lower()
     # 1. l’utente ha scelto il dataset
     df, dataset = _load_dataset_as_df(db, dataset_id)
 
@@ -449,7 +451,7 @@ def clean_outliers_on_dataset(
 
     # 5. nuova riga in datasets
     cleaned_name = body.new_name or f"{dataset.name} (cleaned)"
-    new_ds = _create_new_dataset_row(db, cleaned_name, cleaned_key)
+    new_ds = _create_new_dataset_row(db, cleaned_name, cleaned_key, owner_email=email)  # ⬅️ PASSA L'OWNER
 
     return {
         "original_dataset_id": str(dataset.id),
@@ -525,3 +527,13 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
 
     token = create_access_token({"sub": user.id, "email": user.email})
     return {"access_token": token, "token_type": "bearer"}
+
+@app.delete("/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),  # ← come nel tuo upload
+):
+    owner_email = str(current_user.email).strip().lower()
+    delete_csv(db, dataset_id, owner_email)  # la funzione service mostrata prima
+    return
