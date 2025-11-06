@@ -145,13 +145,13 @@ def _load_dataset_as_df(db: Session, dataset_id: str) -> tuple[pd.DataFrame, Dat
     return df, dataset
 
 
-def _create_new_dataset_row(db: Session, name: str, path: str, current_user = Depends(get_current_user)) -> Dataset:
-    new_id = str(uuid.uuid4())      # 👈 lo facciamo stringa noi
+def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str) -> Dataset:
+    new_id = str(uuid.uuid4()) # 👈 lo facciamo stringa noi
     new_ds = Dataset(
         id=new_id,
         name=name,
         path=path,
-        owner_email=current_user.email,
+        owner_email=owner_email,
     )
     db.add(new_ds)
     db.commit()
@@ -168,7 +168,8 @@ def health():
 
 @app.post("/datasets/upload")
 def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(get_current_user),):
-    ds_id = save_csv(db, file, owner_email=current_user.email)  # <-- passa l’owner
+    owner_email = str(current_user.email).strip().lower()
+    ds_id = save_csv(db, file, owner_email=owner_email)  # <-- passa l’owner
     return {"dataset_id": ds_id}
 
 
@@ -243,9 +244,10 @@ def list_datasets(
     """
     Restituisce SOLO i dataset dell'utente loggato.
     """
+    owner_email = str(current_user.email).strip().lower()
     rows = (
         db.query(Dataset)
-        .filter(Dataset.owner_email == current_user.email)  # << filtro per utente
+        .filter(Dataset.owner_email == owner_email)  # << filtro per utente
         .order_by(Dataset.created_at.desc())
         .all()
     )
@@ -462,7 +464,9 @@ def impute_dataset_with_lerp(
     dataset_id: str,
     body: ImputeBody | None = None,
     db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
 ):
+    email = str(current_user.email).strip().lower()
     # 1. l’utente sceglie il dataset
     df, dataset = _load_dataset_as_df(db, dataset_id)
 
@@ -485,7 +489,9 @@ def impute_dataset_with_lerp(
     upload_to_bucket(imputed_key, buf.getvalue().encode("utf-8"), bucket=SUPABASE_BUCKET)
 
     imputed_name = body.new_name if body and body.new_name else f"{dataset.name} (imputed)"
-    new_ds = _create_new_dataset_row(db, imputed_name, imputed_key)
+    new_ds = _create_new_dataset_row(
+        db, imputed_name, imputed_key, owner_email=email  # ⬅️ PASSA L'OWNER
+    )
 
     return {
         "original_dataset_id": str(dataset.id),

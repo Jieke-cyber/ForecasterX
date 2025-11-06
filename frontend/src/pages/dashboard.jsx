@@ -31,7 +31,7 @@ export default function Dashboard() {
 
   const onImpute = async (id) => {
     setMsg(null);
-    try { await api.post(`/datasets/${id}/impute`); setMsg("Imputazione completata"); load(); }
+    try { await api.post(`/datasets/${id}/impute-linear`); setMsg("Imputazione completata"); load(); }
     catch (e) { setMsg(e?.response?.data?.detail ?? "Errore imputazione"); }
   };
 
