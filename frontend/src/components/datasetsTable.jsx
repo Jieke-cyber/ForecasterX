@@ -1,32 +1,43 @@
+// src/components/DatasetsTable.jsx
 import React from "react";
 
-export default function DatasetsTable({ items, onClean, onImpute }) {
+const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #eee", fontWeight: 600 };
+const td = { padding: "10px 8px", borderBottom: "1px solid #f3f3f3" };
+
+export default function DatasetsTable({ items = [], onClean, onImpute }) {
+  if (!items.length) {
+    return (
+      <div style={{ marginTop: 12, border: "1px solid #eee", padding: 12, borderRadius: 8 }}>
+        Nessun dataset
+      </div>
+    );
+  }
+
+  const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : "-");
+
   return (
-    <div style={{overflowX:"auto", border:"1px solid #eee", borderRadius:12}}>
-      <table style={{minWidth:600, width:"100%", borderCollapse:"collapse"}}>
+    <div style={{ marginTop: 16 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{textAlign:"left", padding:8}}>ID</th>
-            <th style={{textAlign:"left", padding:8}}>Nome</th>
-            <th style={{textAlign:"left", padding:8}}>Creato</th>
-            <th style={{textAlign:"left", padding:8}}>Azioni</th>
+            <th style={th}>Nome</th>
+            <th style={th}>Creato</th>
+            <th style={th}>Azioni</th>
           </tr>
         </thead>
         <tbody>
-          {items.map(d => (
-            <tr key={d.id} style={{borderTop:"1px solid #eee"}}>
-              <td style={{padding:8}}>{d.id}</td>
-              <td style={{padding:8}}>{d.name ?? "—"}</td>
-              <td style={{padding:8}}>{d.created_at ? new Date(d.created_at).toLocaleString() : "—"}</td>
-              <td style={{padding:8}}>
-                <button onClick={()=>onClean(d.id)}>Clean outliers</button>
-                <button onClick={()=>onImpute(d.id)} style={{marginLeft:8}}>Impute</button>
+          {items.map((r) => (
+            <tr key={r.id ?? r.path /* id usato solo come key, non mostrato */}>
+              <td style={td}>{r.name ?? "-"}</td>
+              <td style={td}>{fmt(r.created_at)}</td>
+              <td style={td}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => onClean?.(r.id)}>Pulizia outlier</button>
+                  <button onClick={() => onImpute?.(r.id)}>Imputazione</button>
+                </div>
               </td>
             </tr>
           ))}
-          {items.length === 0 && (
-            <tr><td style={{padding:8}} colSpan="4">Nessun dataset</td></tr>
-          )}
         </tbody>
       </table>
     </div>

@@ -23,11 +23,19 @@ a:hover {
 }
 
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
+  margin: 0;             /* niente margini */
+  display: block;        /* rimuovi il flex globale */
   min-width: 320px;
+  background: #fff;      /* opzionale: sfondo chiaro */
+}
+
+/* Utilità per centrare a schermo intero */
+.center-screen {
   min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
 }
 
 h1 {
