@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import DatasetsTable from "../components/DatasetsTable.jsx";
 import UploadDataset from "../components/UploadDataset.jsx";
 
-export default function Dashboard() {
+export default function Datasets() {
   const { logout, user } = useAuth();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -57,6 +57,19 @@ const onImpute = async (id) => {
   }
 };
 
+const onDelete = async (id) => {
+  if (!id) return setMsg("ID mancante.");
+  setMsg(null);
+  try {
+    await api.post(`/datasets/${id}/deleter`); // o /impute
+    setMsg("Eliminazione completata");
+    load();
+  } catch (e) {
+    setMsg(asMsg(e, "Errore eliminazione"));
+  }
+};
+
+
   return (
     <div style={{ padding:16 }}>
       <header style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -80,7 +93,7 @@ const onImpute = async (id) => {
 
       {loading
         ? <p>Caricamento…</p>
-        : <DatasetsTable items={items} onClean={onClean} onImpute={onImpute} />}
+        : <DatasetsTable items={items} onClean={onClean} onImpute={onImpute} onDelete={onDelete}/>}
     </div>
   );
 }

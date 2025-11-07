@@ -528,7 +528,7 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
     token = create_access_token({"sub": user.id, "email": user.email})
     return {"access_token": token, "token_type": "bearer"}
 
-@app.delete("/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.post("/datasets/{dataset_id}/deleter", status_code=status.HTTP_204_NO_CONTENT)
 def delete_dataset(
     dataset_id: str,
     db: Session = Depends(get_db),

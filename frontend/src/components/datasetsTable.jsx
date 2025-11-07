@@ -4,7 +4,7 @@ import React from "react";
 const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #eee", fontWeight: 600 };
 const td = { padding: "10px 8px", borderBottom: "1px solid #f3f3f3" };
 
-export default function DatasetsTable({ items = [], onClean, onImpute }) {
+export default function DatasetsTable({ items = [], onClean, onImpute, onDelete }) {
   if (!items.length) {
     return (
       <div style={{ marginTop: 12, border: "1px solid #eee", padding: 12, borderRadius: 8 }}>
@@ -31,9 +31,10 @@ export default function DatasetsTable({ items = [], onClean, onImpute }) {
               <td style={td}>{r.name ?? "-"}</td>
               <td style={td}>{fmt(r.created_at)}</td>
               <td style={td}>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{display: "flex", gap: 8}}>
                   <button onClick={() => onClean?.(r.id)}>Pulizia outlier</button>
                   <button onClick={() => onImpute?.(r.id)}>Imputazione</button>
+                  <button onClick={() => onDelete?.(r.id)}>Elimina</button>
                 </div>
               </td>
             </tr>
