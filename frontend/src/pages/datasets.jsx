@@ -73,7 +73,7 @@ const onDelete = async (id) => {
   return (
     <div style={{ padding:16 }}>
       <header style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-        <h1>Dashboard</h1>
+        <h1>Datasets</h1>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           <button onClick={() => setShowUpload(v => !v)}>
             {showUpload ? "Chiudi upload" : "Carica dataset"}

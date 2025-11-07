@@ -21,7 +21,6 @@ from .jobs import train_job
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
 from cleanlab.outlier import OutOfDistribution
-from pypots.imputation.lerp.model import Lerp
 
 from .models import User
 from .auth_utils import hash_password, verify_password, create_access_token
