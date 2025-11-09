@@ -4,7 +4,8 @@ import SidebarNav from "../components/SidebarNav.jsx";
 
 export default function ProtectedShell({ children }) {
   const pages = [
-    { path: "/", label: "Datasets" },
+    { path: "/datasets", label: "Datasets" },
+    { path: "/plots", label: "Plots" },
   ];
 
   return (

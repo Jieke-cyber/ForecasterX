@@ -1,16 +1,18 @@
 # app/main.py
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Security, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt, ExpiredSignatureError, JOSEError
-from starlette.responses import RedirectResponse
+from matplotlib import pyplot as plt
+from starlette.responses import RedirectResponse, StreamingResponse, PlainTextResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import uuid
-import os
+import os, httpx, re
 import io
 
 from .db import Base, engine, get_db
@@ -189,16 +191,21 @@ def start_train(req: TrainRequest, bg: BackgroundTasks, db: Session = Depends(ge
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatus)
-def job_status(job_id: str, db: Session = Depends(get_db)):
+def job_status(job_id: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     run = db.get(TrainingRun, job_id)
     if not run:
         raise HTTPException(404, "Job non trovato")
+    ds = db.get(Dataset, run.dataset_id)
+    owner_email = str(current_user.email).strip().lower()
+    if ds.owner_email != owner_email:  # 👈 NEW
+        raise HTTPException(403, "Forbidden")
 
     result = None
     if run.status == "SUCCESS":
         plot = (
             db.query(ForecastPlot)
-            .filter(ForecastPlot.training_run_id == job_id)
+            .filter((ForecastPlot.training_run_id == job_id),
+                    ForecastPlot.owner_email == owner_email)
             .order_by(ForecastPlot.created_at.desc())
             .first()
         )
@@ -214,26 +221,6 @@ def job_status(job_id: str, db: Session = Depends(get_db)):
     return {"job_id": job_id, "status": run.status, "result": result}
 
 
-@app.get("/plots/recent")
-def recent_plots(limit: int = 10, db: Session = Depends(get_db)):
-    rows = (
-        db.query(ForecastPlot)
-        .order_by(ForecastPlot.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    bucket = os.getenv("SUPABASE_BUCKET_PLOTS", "plots")
-    return [
-        {
-            "id": r.id,
-            "training_run_id": r.training_run_id,
-            "name": r.name,
-            "path": r.path,
-            "url": f"{SUPABASE_URL}/storage/v1/object/public/{bucket}/{r.path}",
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in rows
-    ]
 
 @app.get("/datasets")
 def list_datasets(
@@ -301,40 +288,20 @@ def get_dataset_data(dataset_id: str, db: Session = Depends(get_db)):
     ]
 
 
-@app.get("/plots/recent")
-def list_recent_plots(limit: int = 10, db: Session = Depends(get_db)):
-    """
-    Restituisce gli ultimi forecast salvati (non i dati, solo i metadati).
-    """
-    rows = (
-        db.query(ForecastPlot)
-        .order_by(ForecastPlot.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-    return [
-        {
-            "id": r.id,
-            "training_run_id": r.training_run_id,
-            "name": r.name,
-            "path": r.path,
-            "url": f"{os.getenv('SUPABASE_URL')}/storage/v1/object/public/{os.getenv("SUPABASE_BUCKET_PLOTS")}/{r.path}"
-            if os.getenv("SUPABASE_URL")
-            else None,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in rows
-    ]
 
 
 @app.get("/plots/{plot_id}/data")
-def get_plot_data(plot_id: str, db: Session = Depends(get_db)):
+def get_plot_data(plot_id: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     """
     Scarica il CSV del forecast (quello con ds,value,kind) e lo restituisce al frontend.
     """
     plot = db.get(ForecastPlot, plot_id)
     if not plot:
         raise HTTPException(404, "Plot non trovato")
+
+    owner_email = str(current_user.email).strip().lower()
+    if plot.owner_email != owner_email:  # 👈 NEW
+        raise HTTPException(403, "Forbidden")
 
     client = supa()
     try:
@@ -371,15 +338,18 @@ from fastapi import Query
 
 @app.get("/plots")
 def list_plots(
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(15, ge=1, le=500),
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """
     Restituisce la lista dei forecast salvati (tabella forecast_plots),
     ordinati dal più recente.
     """
+    owner_email = str(current_user.email).strip().lower()
     rows = (
         db.query(ForecastPlot)
+        .filter(ForecastPlot.owner_email == owner_email)
         .order_by(ForecastPlot.created_at.desc())
         .limit(limit)
         .all()
@@ -405,9 +375,6 @@ def list_plots(
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return result
-@app.get("/plots/recent")
-def list_recent_plots(db: Session = Depends(get_db)):
-    return list_plots(limit=10, db=db)
 
 from cleanlab.outlier import OutOfDistribution
 
@@ -536,3 +503,48 @@ def delete_dataset(
     owner_email = str(current_user.email).strip().lower()
     delete_csv(db, dataset_id, owner_email)  # la funzione service mostrata prima
     return
+
+def _split_bucket_path(path: str, default_bucket: str | None = None):
+    """
+    Se path è 'bucket/object.csv' → separa.
+    Se path è solo 'folder/object.csv' → usa default_bucket se fornito.
+    """
+    m = re.match(r"([^/]+)/(.+)$", path)
+    if m:
+        return m.group(1), m.group(2)
+    if default_bucket:
+        return default_bucket, path
+    raise HTTPException(500, detail="Path non valido (atteso 'bucket/object' o setta default_bucket)")
+
+
+@app.get("/public/plots/forecast/{plot_id}/csv")
+def public_forecast_csv(plot_id: str, db=Depends(get_db)):
+    # 1) Leggi metadati dal DB
+    row = db.execute(
+        text("""
+            SELECT id, name, path, owner_email
+            FROM public.forecast_plots
+            WHERE id = :id
+        """),
+        {"id": plot_id}
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Plot non trovato")
+
+    sb=supa()
+
+    # 2) Path reale del file su Supabase
+    file_path = row.path  # <-- IMPORTANTISSIMO
+
+    # 3) Scarica dal bucket
+    try:
+        csv_bytes = sb.storage.from_(SUPABASE_BUCKET).download(file_path)  # <-- BYTES
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"CSV non trovato nello storage: {e}")
+
+    if not csv_bytes:
+        raise HTTPException(status_code=404, detail="CSV vuoto o non trovato")
+
+        # 4) ritorna CSV
+    return Response(content=csv_bytes, media_type="text/csv; charset=utf-8")

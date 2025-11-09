@@ -6,7 +6,7 @@ import io
 import uuid
 import pandas as pd
 from sqlalchemy.orm import Session
-from .models import TrainingRun, ForecastPlot
+from .models import TrainingRun, ForecastPlot, Dataset
 from .services import read_ts_for_training
 from .db import SessionLocal
 from .supa import supa
@@ -33,6 +33,10 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
 
     try:
         # 1) carica storico
+        ds_row = db.get(Dataset, dataset_id)
+        if not ds_row:
+            raise ValueError("Dataset non trovato")
+        owner_email = str(ds_row.owner_email).strip().lower()
         df = read_ts_for_training(db, dataset_id)  # colonne: ds, value
 
         # 2) calcola forecast
@@ -62,19 +66,24 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
 
         client = supa()
         plot_id = str(uuid.uuid4())
-        object_key = f"{plot_id}.csv"
+          # percorso consigliato: plots/<owner>/<dataset>/<plot>.csv
+        safe_owner = owner_email.replace("@", "_at_")
+        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
         client.storage.from_(BUCKET_PLOTS).upload(
-            path=object_key,
-            file=csv_bytes,
-            file_options={"content-type": "text/csv"}
+            path = object_key,
+            file = csv_bytes,
+            file_options = {
+                "content-type": "text/csv",
+                "upsert": "true",  # opzionale ma comodo in dev
+            },
         )
-
         # 5) registra su forecast_plots
         db.add(ForecastPlot(
             id=plot_id,
             training_run_id=run_id,
             name=f"forecast_{run_id}.csv",
-            path=object_key
+            path=object_key,
+            owner_email=owner_email
         ))
         run.status = "SUCCESS"
         run.metrics_json = (run.metrics_json or {}) | metrics

@@ -31,6 +31,8 @@ class ForecastPlot(Base):
     path = Column(String, nullable=False)        # chiave o URL del CSV nello storage
     created_at = Column(DateTime, server_default=func.now())
 
+    owner_email = Column(String, nullable=False, index=True)
+
     run = relationship("TrainingRun", backref="plots")
 
 
