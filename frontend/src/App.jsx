@@ -7,6 +7,7 @@ import Datasets from "./pages/Datasets.jsx";
 import Plots from "./pages/Plots.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
+import Models from "./pages/Models.jsx";
 
 export default function App() {
   return (
@@ -27,6 +28,16 @@ export default function App() {
           <ProtectedRoute>
             <ProtectedShell>
               <Plots />
+            </ProtectedShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/models"
+        element={
+          <ProtectedRoute>
+            <ProtectedShell>
+              <Models />
             </ProtectedShell>
           </ProtectedRoute>
         }

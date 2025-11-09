@@ -548,3 +548,24 @@ def public_forecast_csv(plot_id: str, db=Depends(get_db)):
 
         # 4) ritorna CSV
     return Response(content=csv_bytes, media_type="text/csv; charset=utf-8")
+
+@app.get("/train/{run_id}")
+def get_training_status(run_id: str, db: Session = Depends(get_db)):
+    tr = db.get(TrainingRun, run_id)
+    if not tr:
+        raise HTTPException(404, "TrainingRun non trovato")
+
+    row = db.execute(text("""
+        SELECT id AS plot_id
+        FROM public.forecast_plots
+        WHERE training_run_id = :rid
+        LIMIT 1
+    """), {"rid": run_id}).mappings().first()
+
+    return {
+        "run_id": run_id,
+        "status": tr.status,     # PENDING | RUNNING | SUCCESS | FAILURE
+        "error": tr.error,
+        "plot_id": row["plot_id"] if row else None,
+        "metrics": tr.metrics_json,
+    }

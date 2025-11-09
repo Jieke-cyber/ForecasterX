@@ -6,6 +6,7 @@ export default function ProtectedShell({ children }) {
   const pages = [
     { path: "/datasets", label: "Datasets" },
     { path: "/plots", label: "Plots" },
+      { path: "/models", label: "Models" },
   ];
 
   return (
