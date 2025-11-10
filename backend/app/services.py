@@ -7,7 +7,7 @@ from typing import Iterable
 import pandas as pd
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
-from .models import Dataset, ForecastPlot
+from .models import Dataset, ForecastPlot, TrainingRun
 from .supa import supa, SUPABASE_URL, SUPABASE_BUCKET  # <-- nuovo
 
 BUCKET = os.getenv("SUPABASE_BUCKET", "datasets")
@@ -181,3 +181,24 @@ def delete_single_plot(db: Session, plot_id: str, owner_email: str) -> None:
     db.delete(row)
     db.commit()
 
+def delete_training_run(db: Session, run_id: str, user_email: str) -> None:
+    owner = user_email.strip().lower()
+
+    run = (
+        db.query(TrainingRun)
+          .join(Dataset, TrainingRun.dataset_id == Dataset.id)        # <-- serve per ownership
+          .filter(TrainingRun.id == run_id, Dataset.owner_email == owner)
+          .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="Training run non trovato")
+
+    if run.status == "RUNNING":
+        raise HTTPException(status_code=409, detail="Il run è in esecuzione")
+
+    # opzionale: pulizia record plot collegati (solo DB)
+    db.query(ForecastPlot).filter(ForecastPlot.training_run_id == run_id) \
+      .delete(synchronize_session=False)
+
+    db.delete(run)
+    db.commit()

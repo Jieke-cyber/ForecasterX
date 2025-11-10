@@ -4,7 +4,7 @@ const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #e
 const td = { padding: "10px 8px", borderBottom: "1px solid #f3f3f3" };
 const btn = { padding: "6px 10px", border: "1px solid #222", borderRadius: 8, background: "#fff", cursor: "pointer" };
 
-export default function JobsTable({ items = [], onUpdate }) {
+export default function JobsTable({ items = [], onUpdate, onDelete }) {
   if (!items.length) {
     return (
       <div style={{ marginTop: 12, border: "1px solid #eee", padding: 12, borderRadius: 8 }}>
@@ -35,6 +35,7 @@ export default function JobsTable({ items = [], onUpdate }) {
               <td style={td}>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button style={btn} onClick={() => onUpdate?.(r.id)}>Aggiorna</button>
+                  <button style={btn} onClick={() => onDelete?.(r.id)}>Elimina</button>
                 </div>
               </td>
             </tr>

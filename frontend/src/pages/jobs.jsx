@@ -45,6 +45,18 @@ const onUpdate = async (id) => {
   }
 };
 
+const onDelete = async (id) => {
+  if (!id) return setMsg("ID mancante.");
+  setMsg(null);
+  try {
+    await api.post(`/train/${id}/delete`); // o /impute
+    setMsg("Eliminazione completata");
+    load();
+  } catch (e) {
+    setMsg(asMsg(e, "Errore eliminazione"));
+  }
+};
+
 
    return (
     <div style={{ padding: 16 }}>
@@ -57,7 +69,7 @@ const onUpdate = async (id) => {
 
       {loading
         ? <p>Caricamento…</p>
-        : <JobsTable items={items} onUpdate={onUpdate} />}
+        : <JobsTable items={items} onUpdate={onUpdate} onDelete={onDelete} />}
     </div>
   );
 }

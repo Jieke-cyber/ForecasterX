@@ -18,7 +18,7 @@ import io
 from .db import Base, engine, get_db
 from .models import Dataset, TrainingRun, ForecastPlot
 from .schemas import TrainRequest, JobStatus
-from .services import save_csv, delete_csv, delete_single_plot
+from .services import save_csv, delete_csv, delete_single_plot, delete_training_run
 from .jobs import train_job
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
@@ -599,4 +599,9 @@ def list_jobs(
 @app.post("/plots/{plot_id}/delete", status_code=status.HTTP_204_NO_CONTENT)
 def api_delete_plot(plot_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     delete_single_plot(db, plot_id, current_user.email)
+    return
+
+@app.post("/train/{run_id}/delete", status_code=204)
+def api_delete_training_run(run_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    delete_training_run(db, run_id, current_user.email)
     return
