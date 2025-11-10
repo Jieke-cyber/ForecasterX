@@ -45,6 +45,18 @@ export default function Plots() {
   window.open(`${GRAFANA}/d/${UID}/${SLUG}?${qs.toString()}`, "_blank", "noopener,noreferrer");
 };
 
+  const onDelete = async (id) => {
+  if (!id) return setMsg("ID mancante.");
+  setMsg(null);
+  try {
+    await api.post(`/plots/${id}/delete`); // o /impute
+    setMsg("Eliminazione completata");
+    load();
+  } catch (e) {
+    setMsg(asMsg(e, "Errore eliminazione"));
+  }
+};
+
 
   return (
     <div style={{ padding: 16 }}>
@@ -57,7 +69,7 @@ export default function Plots() {
 
       {loading
         ? <p>Caricamento…</p>
-        : <PlotsTable items={items} onPlot={onPlot} />}
+        : <PlotsTable items={items} onPlot={onPlot} onDelete={onDelete} />}
     </div>
   );
 }

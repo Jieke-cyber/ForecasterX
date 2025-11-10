@@ -2,10 +2,12 @@
 import os
 import uuid
 import io
+from typing import Iterable
+
 import pandas as pd
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
-from .models import Dataset
+from .models import Dataset, ForecastPlot
 from .supa import supa, SUPABASE_URL, SUPABASE_BUCKET  # <-- nuovo
 
 BUCKET = os.getenv("SUPABASE_BUCKET", "datasets")
@@ -139,3 +141,43 @@ def delete_csv(db: Session, dataset_id: str, owner_email: str) -> None:
     # ora elimina la riga DB
     db.delete(ds)
     db.commit()
+
+def _remove_storage_paths(paths: Iterable[str]) -> None:
+    paths = [p for p in set(paths) if p]
+    if not paths:
+        return
+    client = supa()
+    client.storage.from_(BUCKET).remove(paths)
+
+def delete_single_plot(db: Session, plot_id: str, owner_email: str) -> None:
+    """
+    Elimina UN plot dell'utente:
+    - verifica ownership
+    - se nessun altro record punta allo stesso path, rimuove anche il file dallo storage
+    - cancella il record DB
+    """
+    owner = owner_email.strip().lower()
+
+    row = (
+        db.query(ForecastPlot)
+        .filter(ForecastPlot.id == plot_id, Dataset.owner_email == owner)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Plot non trovato")
+
+    # se il file è condiviso da altri record, non cancellarlo dallo storage
+    same_path_count = (
+        db.query(ForecastPlot)
+        .filter(ForecastPlot.path == row.path, ForecastPlot.id != row.id)
+        .count()
+    )
+    if not row:
+        raise HTTPException(404, "Plot non trovato")
+
+    if same_path_count == 0 and row.path:
+        _remove_storage_paths([row.path])
+
+    db.delete(row)
+    db.commit()
+
