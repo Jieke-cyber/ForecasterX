@@ -3,6 +3,7 @@ import React from "react";
 
 const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #eee", fontWeight: 600 };
 const td = { padding: "10px 8px", borderBottom: "1px solid #f3f3f3" };
+const btn = { padding: "6px 10px", border: "1px solid #222", borderRadius: 8, background: "#fff", cursor: "pointer" };
 
 export default function DatasetsTable({ items = [], onClean, onImpute, onDelete }) {
   if (!items.length) {
@@ -32,9 +33,9 @@ export default function DatasetsTable({ items = [], onClean, onImpute, onDelete 
               <td style={td}>{fmt(r.created_at)}</td>
               <td style={td}>
                 <div style={{display: "flex", gap: 8}}>
-                  <button onClick={() => onClean?.(r.id)}>Pulizia outlier</button>
-                  <button onClick={() => onImpute?.(r.id)}>Imputazione</button>
-                  <button onClick={() => onDelete?.(r.id)}>Elimina</button>
+                  <button style={btn} onClick={() => onClean?.(r.id)}>Pulizia outlier</button>
+                  <button style={btn} onClick={() => onImpute?.(r.id)}>Imputazione</button>
+                  <button style={btn} onClick={() => onDelete?.(r.id)}>Elimina</button>
                 </div>
               </td>
             </tr>

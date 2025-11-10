@@ -5,6 +5,7 @@ export default function UploadDataset({ onDone, onCancel }) {
   const [file, setFile] = useState(null);
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
+  const btn = { padding: "6px 10px", border: "1px solid #222", borderRadius: 8, background: "#fff", cursor: "pointer" };
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -38,8 +39,8 @@ export default function UploadDataset({ onDone, onCancel }) {
       <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
       {msg && <small style={{ color: msg.includes("successo") ? "green" : "crimson" }}>{msg}</small>}
       <div style={{ display:"flex", gap:8 }}>
-        <button type="submit" disabled={loading}>{loading ? "Carico…" : "Carica"}</button>
-        {onCancel && <button type="button" onClick={onCancel}>Annulla</button>}
+        <button style={btn} type="submit" disabled={loading}>{loading ? "Carico…" : "Carica"}</button>
+        {onCancel && <button style={btn} type="button" onClick={onCancel}>Annulla</button>}
       </div>
     </form>
   );

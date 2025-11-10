@@ -81,7 +81,7 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
         db.add(ForecastPlot(
             id=plot_id,
             training_run_id=run_id,
-            name=f"forecast_{run_id}.csv",
+            name=f"{ds_row.name} (forecasted)",
             path=object_key,
             owner_email=owner_email
         ))
