@@ -190,7 +190,7 @@ def start_train(req: TrainRequest, bg: BackgroundTasks, db: Session = Depends(ge
     return {"job_id": run_id}
 
 
-@app.get("/jobs/{job_id}", response_model=JobStatus)
+@app.get("/jobs/{job_id}/status", response_model=JobStatus)
 def job_status(job_id: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
     run = db.get(TrainingRun, job_id)
     if not run:
@@ -569,3 +569,26 @@ def get_training_status(run_id: str, db: Session = Depends(get_db)):
         "plot_id": row["plot_id"] if row else None,
         "metrics": tr.metrics_json,
     }
+
+@app.get("/jobs")
+def list_jobs(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    owner_email = str(current_user.email).strip().lower()
+    rows = (
+        db.query(TrainingRun)
+        .join(Dataset, TrainingRun.dataset_id == Dataset.id)   # << join
+        .filter(Dataset.owner_email == owner_email)            # << ora funziona
+        .order_by(TrainingRun.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": r.id,
+            "dataset_name": r.dataset.name if r.dataset else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "status": r.status,
+        }
+        for r in rows
+    ]
