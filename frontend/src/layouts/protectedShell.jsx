@@ -7,6 +7,7 @@ export default function ProtectedShell({ children }) {
     { path: "/datasets", label: "Datasets" },
     { path: "/plots", label: "Plots" },
       { path: "/models", label: "Models" },
+      { path: "/jobs", label: "Jobs" }
   ];
 
   return (

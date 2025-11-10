@@ -8,6 +8,7 @@ import Plots from "./pages/Plots.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import Models from "./pages/Models.jsx";
+import Jobs from "./pages/jobs.jsx";
 
 export default function App() {
   return (
@@ -38,6 +39,16 @@ export default function App() {
           <ProtectedRoute>
             <ProtectedShell>
               <Models />
+            </ProtectedShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/jobs"
+        element={
+          <ProtectedRoute>
+            <ProtectedShell>
+              <Jobs />
             </ProtectedShell>
           </ProtectedRoute>
         }

@@ -16,7 +16,7 @@ export default function SidebarNav({ items = [] }) {
           fontSize: "14px",
         }}
       >
-        My App
+        Menu
       </div>
 
       {items.map((item) => {
