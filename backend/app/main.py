@@ -170,6 +170,9 @@ def health():
 @app.post("/datasets/upload")
 def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(get_current_user),):
     owner_email = str(current_user.email).strip().lower()
+    existing = db.query(Dataset).filter(Dataset.name == file.filename).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="File name already exists, please rename your file before uploading.")
     ds_id = save_csv(db, file, owner_email=owner_email)  # <-- passa l’owner
     return {"dataset_id": ds_id}
 
