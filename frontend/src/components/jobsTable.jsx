@@ -23,6 +23,7 @@ export default function JobsTable({ items = [], onUpdate, onDelete }) {
             <th style={th}>Name</th>
             <th style={th}>Creato</th>
             <th style={th}>Stato</th>
+             <th style={th}>Modello</th>
             <th style={th}>Azioni</th>
           </tr>
         </thead>
@@ -31,7 +32,8 @@ export default function JobsTable({ items = [], onUpdate, onDelete }) {
             <tr key={r.id ?? r.path}>
               <td style={td}>{r.dataset_name ?? "-"}</td>
               <td style={td}>{fmt(r.created_at)}</td>
-                <td style={td}>{r.status ?? "-"}</td>
+              <td style={td}>{r.status ?? "-"}</td>
+              <td style={td}>{r.metric || "-"}</td>
               <td style={td}>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button style={btn} onClick={() => onUpdate?.(r.id)}>Aggiorna</button>

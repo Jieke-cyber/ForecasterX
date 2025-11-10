@@ -586,12 +586,20 @@ def list_jobs(
         .order_by(TrainingRun.created_at.desc())
         .all()
     )
+
+    def metric_from(m: dict | None) -> str:
+        m = m or {}
+        # con ensemble disattivo stai salvando best_model
+        # (se un domani aggiungi "model", prenderà quello)
+        return m.get("model") or m.get("best_model") or "-"
+
     return [
         {
             "id": r.id,
             "dataset_name": r.dataset.name if r.dataset else None,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "status": r.status,
+            "metric": metric_from(r.metrics_json),
         }
         for r in rows
     ]

@@ -42,13 +42,17 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
         # 2) calcola forecast
         try:
 
-            model = AutoTS(forecast_length=horizon, frequency="infer", ensemble="simple")
+            model = AutoTS(forecast_length=horizon, frequency="infer", ensemble= None)
             model = model.fit(df, date_col="ds", value_col="value")
             prediction = model.predict()
             fcst = prediction.forecast
             yhat = fcst.iloc[:, 0].reset_index()
             yhat.columns = ["ds", "yhat"]
-            metrics = {"note": "AutoTS"}
+            best_name = getattr(model, "best_model_name", None)
+            best_params = getattr(model, "best_model_params", None)
+            metrics = {"note": "AutoTS"
+                       , "best_model": best_name
+                       , "best_params": str(best_params)}
         except Exception:
             logger.exception("❌ AutoTS fallito:")
             yhat = naive_forecast(df, horizon)
