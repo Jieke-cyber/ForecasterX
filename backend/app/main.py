@@ -21,18 +21,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Security, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt, ExpiredSignatureError, JOSEError
-from matplotlib import pyplot as plt
-from starlette.responses import RedirectResponse, StreamingResponse, PlainTextResponse
+from starlette.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 import uuid
-import os, httpx, re
+import os, re
 import io
 
 from .db import Base, engine, get_db, SessionLocal
 from .models import Dataset, TrainingRun, ForecastPlot, Model
-from .schemas import TrainRequest, JobStatus, ZeroShotPredictIn, ModelPredictIn, PreviewOut, FinetuneIn
+from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn
 from .services import save_csv, delete_csv, delete_single_plot, delete_training_run
 from .jobs import train_job, _run_lagllama_forecast, _run_lagllama_ft_forecast
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
@@ -43,7 +42,9 @@ from .models import User
 from .auth_utils import hash_password, verify_password, create_access_token
 
 from .auth_utils import SECRET_KEY, ALGORITHM
-from FoundationModel.lagllama import predict_series, _build_estimator, get_predictor
+from FoundationModel.lagllama import predict_series, predict_series_with_predictor, \
+    load_predictor_from_ckpt, finetune_and_dump_ckpt
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -197,6 +198,130 @@ def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str)
     db.commit()
     # 👇 NON facciamo db.refresh(new_ds) perché SQLAlchemy lo rileggerebbe come UUID
     return new_ds
+
+def _run_lagllama_ft_forecast_and_save(
+    db_maker,
+    run_id: str,
+    model_id: str,
+    dataset_id: str,
+    horizon: int,
+    context_len: int,
+):
+    db: Session = db_maker()
+    try:
+        # mark RUNNING
+        run = db.get(TrainingRun, run_id)
+        if not run:
+            # run mancante: niente da fare
+            return
+        run.status = "RUNNING"
+        db.commit()
+
+        # --- carica dataset (come nel tuo zero-shot) ---
+        df, ds_row = _load_dataset_as_df(db, dataset_id)
+        if df is None or df.empty:
+            raise RuntimeError("Dataset vuoto o non trovato")
+
+        df = df.sort_values("ds")
+        owner_email = (str(ds_row.owner_email) if ds_row and ds_row.owner_email else "").strip().lower()
+        values = df["value"].to_numpy(dtype=float)
+        start_ts = df["ds"].iloc[0]
+
+        # inferisci frequenza (riusa il tuo helper se presente)
+        try:
+            # se hai _infer_freq(df["ds"]), puoi usare quello
+            freq = pd.infer_freq(pd.to_datetime(df["ds"]).sort_values())
+        except Exception:
+            freq = None
+        freq = freq or "D"
+
+        # --- scarica ckpt FT dallo storage ---
+        m = db.query(Model).filter(Model.id == model_id).first()
+        if not m or not m.storage_path:
+            raise RuntimeError("Modello FT senza storage_path")
+
+        blob: bytes = supa().storage.from_(SUPABASE_BUCKET).download(m.storage_path)
+        tmp_ckpt = tempfile.NamedTemporaryFile(delete=False, suffix=".ckpt")
+        tmp_ckpt.write(blob); tmp_ckpt.flush(); tmp_ckpt.close()
+        ckpt_local_path = tmp_ckpt.name
+
+        # --- costruisci predictor FT dal ckpt ---
+        predictor = load_predictor_from_ckpt(
+            weights_ckpt_path=ckpt_local_path,
+            horizon=horizon,
+            context_len=context_len,
+            freq=freq,
+        )
+
+        # --- predizione ---
+        yhat = predict_series_with_predictor(
+            predictor,
+            series=values,
+            horizon=horizon,
+            freq=freq,
+            start=start_ts,
+        )
+
+        # --- costruisci future index & CSV combinato (history + forecast) ---
+        # offset dal freq (stesso pattern del tuo zero-shot)
+        try:
+            offset = pd.tseries.frequencies.to_offset(freq)
+        except Exception:
+            offset = pd.tseries.frequencies.to_offset("D")
+
+        last_ts = df["ds"].max()
+        future_index = pd.date_range(last_ts + offset, periods=horizon, freq=freq)
+
+        fut = pd.DataFrame({"ds": future_index, "value": yhat[:horizon], "kind": "forecast"})
+        hist = df.assign(kind="history")
+        combined = pd.concat([hist, fut], ignore_index=True)
+
+        # --- upload CSV su Supabase Storage ---
+        csv_bytes = combined.to_csv(index=False).encode("utf-8")
+        client = supa()
+        plot_id = str(uuid.uuid4())
+        safe_owner = (owner_email or "public").replace("@", "_at_")
+        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"  # es. plots/<user>/<dataset>/<plot>.csv, se il bucket è quello dei plots
+
+        client.storage.from_(SUPABASE_BUCKET).upload(
+            path=object_key,
+            file=csv_bytes,
+            file_options={"content-type": "text/csv", "upsert": "true"},
+        )
+
+        # --- registra ForecastPlot e finalizza run ---
+        db.add(ForecastPlot(
+            id=plot_id,
+            training_run_id=run_id,
+            name=f"{getattr(ds_row, 'name', dataset_id)} (Lag-Llama FT forecast)",
+            path=object_key,
+            owner_email=owner_email,
+        ))
+
+        run.status = "SUCCESS"
+        meta = (run.metrics_json or {})
+        meta.update({
+            "note": "Lag-Llama fine-tuned",
+            "horizon": horizon,
+            "context_len": context_len,
+            "freq": freq,
+            "model_id_used": model_id,
+        })
+        run.metrics_json = meta
+        db.commit()
+
+    except Exception as e:
+        run = db.get(TrainingRun, run_id)
+        if run:
+            run.status = "FAILURE"
+            run.error = str(e)
+            db.commit()
+        # facoltativo: loggare l'eccezione
+        # print("FT predict/save error:", e)
+        raise
+    finally:
+        db.close()
+
 
 @app.get("/")
 def root():
@@ -724,139 +849,109 @@ def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int,
 
 # ---------- FINETUNE: crea ZIP nello Storage + riga in models ----------
 @app.post("/lag-llama/finetune")
-def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db)):
-    df, _ = _load_df(db, payload.dataset_id)
+def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db), current_user = Depends(get_current_user),):
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("weights.ckpt", b"PLACEHOLDER")  # sostituire coi veri pesi
-        zf.writestr("config.json", json.dumps({"epochs": payload.epochs}))
-        zf.writestr("metadata.json", json.dumps({
-            "foundation": "lag-llama",
-            "dataset_id": payload.dataset_id,
-            "created_at": dt.datetime.utcnow().isoformat()+"Z"
-        }))
+    owner_email = str(current_user.email).strip().lower()
+    df, _ = _load_dataset_as_df(db, payload.dataset_id)
+    if df is None or df.empty:
+        raise HTTPException(400, "Dataset vuoto o non trovato")
 
-    model_id = str(uuid.uuid4())
-    object_key = f"models/{model_id}/model.zip"
-    supa().storage.from_(SUPABASE_BUCKET).upload(
-        path=object_key, file=buf.getvalue(),
-        file_options={"content-type":"application/zip","upsert":"true"}
+    df = df.sort_values("ds")
+    values = df["value"].to_numpy(dtype=float)
+    start_ts = df["ds"].iloc[0]
+    try:
+        freq = pd.infer_freq(pd.to_datetime(df["ds"]).sort_values())
+    except Exception:
+        freq = None
+    freq = freq or "D"
+
+    # 1) FINE-TUNING → ckpt path locale
+    ckpt_path = finetune_and_dump_ckpt(
+        values=values,
+        start=start_ts,
+        freq=freq,
+        prediction_length=payload.horizon,
+        context_length=payload.context_len,
+        lr=payload.lr,
+        aug_prob=payload.aug_prob,
+        max_epochs=payload.epochs,
+        ckpt_base_dir=None,  # lascia che Lightning scelga/crei la dir
     )
 
-    fm = db.query(Model).filter(Model.name=="Lag-Llama", Model.kind=="foundation").first()
-    m = Model(id=model_id, name="Lag-Llama FT", kind="fine_tuned", base_model="lag-llama",
-              storage_path=object_key,
-              params_json={"epochs": payload.epochs, "dataset_id": payload.dataset_id,
-                           "foundation_model_id": fm.id if fm else None},
-              metrics_json={}, owner_email=None, status="AVAILABLE")
-    db.add(m); db.commit()
-    return {"model_id": m.id, "storage_path": m.storage_path}
+    # 2) Upload ckpt su Supabase
+    model_id = str(uuid.uuid4())
+    object_key = f"models/{model_id}/weights.ckpt"
+    with open(ckpt_path, "rb") as f:
+        blob = f.read()
+    supa().storage.from_(SUPABASE_BUCKET).upload(
+        path=object_key,
+        file=blob,
+        file_options={"content-type": "application/octet-stream", "upsert": "true"},
+    )
 
-# ---------- helper: scarica ZIP FT e costruisci predictor ----------
-_FT_CACHE: dict[str, Path] = {}
-def _download_and_extract_model(storage_key: str) -> Path:
-    if storage_key in _FT_CACHE and _FT_CACHE[storage_key].exists():
-        return _FT_CACHE[storage_key]
-    client = supa()
-    blob: bytes = client.storage.from_(SUPABASE_BUCKET).download(storage_key)
-    tmpdir = Path(tempfile.mkdtemp(prefix="llama_ft_"))
-    zpath = tmpdir / "model.zip"; zpath.write_bytes(blob)
-    outdir = tmpdir / "model"; outdir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zpath, "r") as zf: zf.extractall(outdir)
-    _FT_CACHE[storage_key] = outdir
-    return outdir
-
-def _build_ft_predictor(model_dir: Path, horizon: int, context_len: int):
-    for fname in ["weights.ckpt", "lag-llama.ckpt", "model.ckpt"]:
-        ckpt_path = model_dir / fname
-        if ckpt_path.exists():
-            est = _build_estimator(str(ckpt_path), horizon, context_len)
-            return est.create_predictor(est.create_transformation(),
-                                        est.create_lightning_module())
-    # fallback foundation
-    return get_predictor(horizon, context_len)
-
-# ---------- PREDICT FT: preview ----------
-@app.post("/models/{model_id}/predict", response_model=PreviewOut)
-def predict_with_ft(model_id: str, payload: ModelPredictIn, db: Session = Depends(get_db)):
-    m = db.get(Model, model_id)
-    if not m or m.kind!="fine_tuned" or m.base_model!="lag-llama":
-        raise HTTPException(404, "Modello FT Lag-Llama non trovato")
-    df, _ = _load_df(db, payload.dataset_id)
-    s = pd.Series(df["value"].values, index=df["ds"])
-    model_dir = _download_and_extract_model(m.storage_path)
-    predictor = _build_ft_predictor(model_dir, payload.horizon, payload.context_len)
-    yhat = predictor.predict([s.astype(float).tolist()])[0]
-    return PreviewOut(head=[float(x) for x in yhat[:min(20, payload.horizon)]],
-                      n=payload.horizon, model_id=m.id)
-
-# ---------- PREDICT FT: salvataggio CSV (history+forecast) ----------
-@app.post("/models/{model_id}/predict/save")
-def predict_with_ft_and_save(model_id: str,
-                             payload: ModelPredictIn,
-                             background: BackgroundTasks,
-                             db: Session = Depends(get_db)):
-    m = db.get(Model, model_id)
-    if not m or m.kind!="fine_tuned" or m.base_model!="lag-llama":
-        raise HTTPException(404, "Modello FT Lag-Llama non trovato")
-
-    run_id = str(uuid.uuid4())
-    db.add(TrainingRun(id=run_id, dataset_id=str(payload.dataset_id), status="PENDING",
-                       metrics_json={}, error=None))
+    # 3) Inserisci riga in DB
+    m = Model(
+        id=model_id,
+        name="Lag-Llama FT",
+        kind="fine_tuned",
+        base_model="lag-llama",
+        storage_path=object_key,
+        params_json={
+            "dataset_id": payload.dataset_id,
+            "epochs": payload.epochs,
+            "horizon": payload.horizon,
+            "context_len": payload.context_len,
+            "freq": freq,
+            "lr": payload.lr,
+            "aug_prob": payload.aug_prob,
+        },
+        metrics_json={},
+        owner_email=owner_email,
+        status="AVAILABLE",
+    )
+    db.add(m)
     db.commit()
 
-    background.add_task(_run_lagllama_ft_forecast, SessionLocal, run_id, model_id,
-                        str(payload.dataset_id), int(payload.horizon), int(payload.context_len))
+    return {"model_id": m.id, "storage_path": m.storage_path}
+
+
+# ---------- PREDICT FT: preview ----------
+@app.post("/lag-llama-ft/{model_id}/predict/save")
+def lag_llama_ft_predict_and_save(
+    model_id: str,
+    payload: PredictFTSaveIn,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    # controlla che il modello FT esista
+    m = db.query(Model).filter(Model.id == model_id).first()
+    if not m:
+        raise HTTPException(404, "Modello non trovato")
+    if (m.kind or "").lower() != "fine_tuned" or (m.base_model or "").lower() != "lag-llama":
+        raise HTTPException(400, "Il modello non è un Lag-Llama fine-tuned")
+
+    run_id = str(uuid.uuid4())
+    db.add(TrainingRun(
+        id=run_id,
+        dataset_id=str(payload.dataset_id),
+        status="PENDING",
+        metrics_json={},
+        error=None,
+        model_id_used=model_id,
+    ))
+    db.commit()
+
+    background.add_task(
+        _run_lagllama_ft_forecast_and_save,
+        SessionLocal,
+        run_id,
+        model_id,
+        str(payload.dataset_id),
+        int(payload.horizon),
+        int(payload.context_len),
+    )
     return {"run_id": run_id}
-
-def _run_lagllama_ft_forecast(db_maker, run_id: str, model_id: str, dataset_id: str,
-                              horizon: int, context_len: int):
-    db: Session = db_maker()
-    try:
-        run = db.get(TrainingRun, run_id); run.status="RUNNING"; db.commit()
-        df, ds_row = _load_df(db, dataset_id)
-        owner_email = str(ds_row.owner_email).strip().lower()
-
-        m = db.get(Model, model_id)
-        model_dir = _download_and_extract_model(m.storage_path)
-        predictor = _build_ft_predictor(model_dir, horizon, context_len)
-
-        s = pd.Series(df["value"].values, index=df["ds"])
-        yhat = predictor.predict([s.astype(float).tolist()])[0]
-        future_index = pd.date_range(df["ds"].max() + pd.tseries.frequencies.to_offset(_infer_freq(df["ds"])),
-                                     periods=horizon)
-        fut = pd.DataFrame({"ds": future_index, "value": yhat[:horizon], "kind": "forecast"})
-        hist = df.assign(kind="history")
-        combined = pd.concat([hist, fut], ignore_index=True)
-
-        csv_bytes = combined.to_csv(index=False).encode("utf-8")
-        client = supa()
-        plot_id = str(uuid.uuid4())
-        safe_owner = owner_email.replace("@","_at_")
-        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
-        client.storage.from_(SUPABASE_BUCKET).upload(
-            path=object_key, file=csv_bytes,
-            file_options={"content-type":"text/csv","upsert":"true"}
-        )
-
-        db.add(ForecastPlot(id=plot_id, training_run_id=run_id,
-                            name=f"{ds_row.name} (FT forecast)",
-                            path=object_key, owner_email=owner_email))
-
-        run.status="SUCCESS"
-        run.metrics_json = (run.metrics_json or {}) | {"note":"Lag-Llama FT",
-                                                       "horizon":horizon, "context_len":context_len}
-        if hasattr(run, "model_id_used"):
-            run.model_id_used = m.id
-        db.commit()
-    except Exception as e:
-        run = db.get(TrainingRun, run_id)
-        if run: run.status="FAILURE"; run.error=str(e); db.commit()
-        raise
-    finally:
-        db.close()
-
+# ---------- PREDICT FT: salvataggio CSV (history+forecast) ----------
 @app.get("/models")
 def list_models(
     db: Session = Depends(get_db),

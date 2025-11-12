@@ -28,14 +28,15 @@ class ZeroShotPredictIn(BaseModel):
 
 class FinetuneIn(BaseModel):
     dataset_id: str
-    epochs: int = 1
+    epochs: int = Field(ge=1, le=500, description="Numero di epoche di fine-tuning")
+    # opzionali “ragionevoli” con default buoni
+    horizon: int = Field(60, ge=1, le=10000)
+    context_len: int = Field(256, ge=1, le=100000)
+    lr: float = Field(1e-4, gt=0)
+    aug_prob: float = Field(0.2, ge=0, le=1.0)
 
-class ModelPredictIn(BaseModel):
+
+class PredictFTSaveIn(BaseModel):
     dataset_id: str
-    horizon: int = 48
-    context_len: int = 512
-
-class PreviewOut(BaseModel):
-    head: list[float]
-    n: int
-    model_id: Optional[int] = None
+    horizon: int
+    context_len: int

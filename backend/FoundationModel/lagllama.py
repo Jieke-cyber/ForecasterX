@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import glob
+import tempfile
 from pathlib import Path
 import os
 import numpy as np
@@ -275,4 +277,255 @@ def predict_series(
         yhat = np.concatenate([yhat, pad])
     return yhat[:horizon]
 
+def _normalize_time_feat_keys(model_kwargs: dict) -> dict:
+    """Rende compatibili 'time_feat' e 'time_features' con la firma del tuo LagLlamaEstimator."""
+    params = signature(LagLlamaEstimator).parameters
+    mk = dict(model_kwargs or {})
+    if "time_feat" in mk and "time_feat" not in params and "time_features" in params:
+        mk["time_features"] = mk.pop("time_feat")
+    if "time_features" in mk and "time_features" not in params and "time_feat" in params:
+        mk["time_feat"] = mk.pop("time_features")
+    return mk
 
+def build_finetune_estimator_from_foundation(
+    *,
+    foundation_ckpt_path: str | None,
+    prediction_length: int,
+    context_length: int,
+    freq: str = "D",
+    lr: float = 1e-4,
+    aug_prob: float = 0.2,
+    max_epochs: int = 50,
+    default_root_dir: str | None = None,   # dove Lightning salverà i ckpt
+) -> LagLlamaEstimator:
+    """
+    Crea un Estimator per FINE-TUNING partendo dal checkpoint foundation (ckpt completo).
+    Scrive i checkpoint Lightning in default_root_dir/version_*/checkpoints/*.ckpt
+    """
+    ckpt_path = foundation_ckpt_path or (os.getenv("LAG_LLAMA_CKPT") or str(DEFAULT_CKPT))
+    ckpt = _load_ckpt(ckpt_path)
+    base_kwargs = _extract_model_kwargs(ckpt)
+
+    # opzionale: se hai già questa helper, usa la tua; altrimenti no-op
+    try:
+        base_kwargs = _normalize_time_feat_keys(base_kwargs)  # se presente nel tuo file
+    except NameError:
+        pass
+
+    params = signature(LagLlamaEstimator).parameters
+    est_kwargs = dict(
+        ckpt_path=ckpt_path,
+        prediction_length=int(prediction_length),
+        context_length=int(context_length),
+        lr=float(lr),
+        aug_prob=float(aug_prob),
+        **base_kwargs,
+    )
+
+    # freq/freq_str se supportati (altrimenti la freq sta nel ListDataset)
+    if "freq" in params:
+        est_kwargs["freq"] = str(freq)
+    elif "freq_str" in params:
+        est_kwargs["freq_str"] = str(freq)
+
+    # rope_scaling se supportato
+    base_ctx = ckpt.get("hyper_parameters", {}).get("model_kwargs", {}).get("context_length")
+    if base_ctx is not None and "rope_scaling" in params:
+        try:
+            base_ctx = int(base_ctx)
+            factor = max(1.0, (int(context_length) + int(prediction_length)) / float(base_ctx))
+            est_kwargs["rope_scaling"] = {"type": "linear", "factor": factor}
+        except Exception:
+            pass
+
+    # epoche + checkpointing
+    tkwargs = {"max_epochs": int(max_epochs), "enable_checkpointing": True}
+    if default_root_dir:
+        tkwargs["default_root_dir"] = default_root_dir
+    if "trainer_kwargs" in params:
+        est_kwargs["trainer_kwargs"] = tkwargs
+    elif "max_epochs" in params:
+        est_kwargs["max_epochs"] = int(max_epochs)
+
+    # batch/samples se previsti
+    if "batch_size" in params:
+        est_kwargs["batch_size"] = 64
+    if "num_parallel_samples" in params:
+        est_kwargs["num_parallel_samples"] = 20
+
+    return LagLlamaEstimator(**est_kwargs)
+
+
+
+def _latest_ckpt_path(root: str) -> str | None:
+    """
+    Cerca il checkpoint più recente sotto <root>/**/checkpoints/*.ckpt
+    (va bene se fai un FT alla volta e hai un solo foundation).
+    """
+    pats = [
+        os.path.join(root, "**", "checkpoints", "*.ckpt"),
+        os.path.join(root, "**", "*.ckpt"),
+    ]
+    candidates = []
+    for pat in pats:
+        candidates.extend(glob.glob(pat, recursive=True))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return candidates[0]
+
+
+def finetune_and_dump_ckpt(
+    *,
+    values: np.ndarray,
+    start: str | pd.Timestamp,
+    freq: str,
+    prediction_length: int,
+    context_length: int,
+    foundation_ckpt_path: str | None = None,
+    lr: float = 5e-4,
+    aug_prob: float = 0.0,
+    max_epochs: int = 50,
+    ckpt_base_dir: str | None = None,
+) -> str:
+    """
+    Esegue FINE-TUNING e ritorna il path del checkpoint Lightning (.ckpt) completo.
+    """
+    import tempfile, glob, os, pathlib
+    import pandas as pd
+    import numpy as np
+
+    # --- sanitizzazione ---
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if not np.isfinite(arr).all():
+        raise ValueError("La serie contiene NaN/inf.")
+    if arr.size < max(8, context_length):
+        raise ValueError(f"Serie troppo corta: {arr.size} < context_length={context_length}")
+
+    # --- freq robusta ---
+    if not freq or str(freq).strip() == "0":
+        freq = "D"
+
+    # --- split 80/20 temporale (invece di arr[:-PL] vs arr) ---
+    n = len(arr)
+    split_idx = max(int(n * 0.8), 1)
+
+    start_ts = pd.Timestamp(start)
+    # calcola lo start della valid usando l'offset della freq
+    try:
+        offset = pd.tseries.frequencies.to_offset(freq)
+        valid_start = start_ts + (split_idx * offset)
+    except Exception:
+        # fallback: stesso start (non perfetto, ma funziona)
+        valid_start = start_ts
+
+    train_ds = ListDataset(
+        [{"target": arr[:split_idx], "start": start_ts}],
+        freq=freq,
+    )
+    valid_ds = ListDataset(
+        [{"target": arr[split_idx:], "start": valid_start}],
+        freq=freq,
+    )
+
+    # --- dove salvare i ckpt ---
+    rootdir = ckpt_base_dir or tempfile.mkdtemp(prefix="llama_ft_ckpt_")
+
+    # --- estimator da foundation ---
+    est = build_finetune_estimator_from_foundation(
+        foundation_ckpt_path=foundation_ckpt_path,
+        prediction_length=int(prediction_length),
+        context_length=int(context_length),
+        freq=str(freq),
+        lr=float(lr),
+        aug_prob=float(aug_prob),
+        max_epochs=int(max_epochs),
+        default_root_dir=rootdir,
+    )
+
+    # --- training: Lightning salva i ckpt sotto rootdir/**/checkpoints ---
+    _ = est.train(
+        train_ds,
+        validation_data=valid_ds,
+        cache_data=True,
+        shuffle_buffer_length=1000,
+    )
+
+    # --- prendi il ckpt più recente ---
+    pats = [
+        os.path.join(rootdir, "**", "checkpoints", "*.ckpt"),
+        os.path.join(rootdir, "**", "*.ckpt"),
+    ]
+    candidates = []
+    for pat in pats:
+        candidates.extend(glob.glob(pat, recursive=True))
+    if not candidates:
+        raise RuntimeError(f"Nessun checkpoint salvato in {rootdir}")
+    candidates.sort(key=lambda p: pathlib.Path(p).stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+
+# ---------------- PREDICTOR da CKPT FT (riuso in inferenza) -------------------
+def load_predictor_from_ckpt(
+    weights_ckpt_path: str,
+    horizon: int,
+    context_len: int,
+    freq: str = "D",
+    *,
+    num_samples: int = 20,
+    batch_size: int = 64,
+    device: str = "cpu",
+):
+    """
+    Ricrea l'estimator dal ckpt (completo) e costruisce il Predictor per l'inferenza.
+    """
+    est = _build_estimator(weights_ckpt_path, horizon, context_len, freq)
+    try:
+        pred = est.create_predictor(
+            transformation=est.create_transformation(),
+            module=est.create_lightning_module(),
+            device=device,
+        )
+    except TypeError:
+        pred = est.create_predictor(
+            transformation=est.create_transformation(),
+            module=est.create_lightning_module(),
+        )
+    if hasattr(pred, "num_parallel_samples"): pred.num_parallel_samples = int(num_samples)
+    if hasattr(pred, "batch_size"): pred.batch_size = int(batch_size)
+    return pred
+
+
+# (Utility) Predici con un Predictor già pronto (foundation o FT)
+from gluonts.model.predictor import Predictor as _GluonPredictor
+
+def predict_series_with_predictor(
+    predictor: _GluonPredictor,
+    series: np.ndarray,
+    horizon: int,
+    *,
+    freq: str = "D",
+    start: str | pd.Timestamp = "1970-01-01",
+) -> np.ndarray:
+    arr = np.asarray(series, dtype=float).reshape(-1)
+    if not np.isfinite(arr).all():
+        raise ValueError("La serie contiene NaN/inf.")
+    if arr.size < max(8, horizon):
+        raise ValueError(f"Serie troppo corta per horizon={horizon}")
+    if not freq or str(freq).strip() == "0":
+        freq = "D"
+    ds = ListDataset([{"target": arr, "start": pd.Timestamp(start)}], freq=freq)
+    it = predictor.predict(ds)
+    fc = next(iter(it), None)
+    if fc is None:
+        raise RuntimeError("Predictor non ha restituito forecast")
+    if hasattr(fc, "mean"): yhat = np.asarray(fc.mean, dtype=float)
+    elif hasattr(fc, "quantile"): yhat = np.asarray(fc.quantile("0.5"), dtype=float)
+    elif hasattr(fc, "samples"): yhat = np.asarray(fc.samples, dtype=float).mean(axis=0)
+    else: yhat = np.asarray(fc, dtype=float)
+    if yhat.ndim > 1: yhat = yhat[0]
+    if yhat.shape[0] < horizon:
+        yhat = np.concatenate([yhat, np.full(horizon - yhat.shape[0], np.nan)])
+    return yhat[:horizon]
+# ============================================================================#

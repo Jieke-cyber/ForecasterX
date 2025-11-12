@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import api, { listModels } from "../lib/api";
 import ModelsTable from "../components/ModelsTable.jsx";
 import DatasetPickerModal from "../components/DatasetPickerModal.jsx";
-import { llamaZeroShotSave, llamaFinetune, llamaPredictFT, llamaPredictFTSave } from "../lib/api";
+import { llamaZeroShotSave, llamaFinetune, llamaPredictFTSave } from "../lib/api";
 
 const wrap = { padding: 16 };
 const msgBox = { marginTop: 12, border: "1px solid #eee", padding: 8, borderRadius: 8 };
@@ -15,30 +15,27 @@ export default function Models() {
   const [models, setModels] = useState([]);
   const [items, setItems] = useState([]);
 
-  // dataset picker
   const [picking, setPicking] = useState(false);
   const [datasets, setDatasets] = useState([]);
   const [loadingDs, setLoadingDs] = useState(false);
   const [pendingAction, setPendingAction] = useState(null); // { modelKey, actionKey, modelId? }
-  const [modalMode, setModalMode] = useState("zeroShotSave"); // "zeroShotSave" | "fineTune"
+  const [okText, setOkText] = useState("Conferma");
 
-  // 1) carica /models all’avvio
   useEffect(() => {
     (async () => {
       try {
         const { data } = await listModels();
-        const arr = Array.isArray(data) ? data : [];
-        setModels(arr);
-      } catch (e) {
-        console.warn("GET /models failed:", e?.response?.status, e?.response?.data);
+        setModels(Array.isArray(data) ? data : []);
+      } catch {
         setModels([]);
       }
     })();
   }, []);
 
-  // 2) costruisci righe tabella
   useEffect(() => {
     const rows = [];
+
+    // AutoTS (rimane uguale se lo usi)
     rows.push({
       key: "autots",
       name: "AutoTS",
@@ -74,8 +71,7 @@ export default function Models() {
           name: m.name || `Lag-Llama FT (${String(id).slice(0, 8)})`,
           description: "Modello fine-tunato su dataset specifici.",
           actions: [
-            { key: "ft-preview", label: "Predici (preview)" },
-            { key: "ft-save",    label: "Predici → salva CSV" },
+            { key: "ft-save", label: "Predici → salva CSV" },
           ],
           _model: m,
         });
@@ -98,7 +94,6 @@ export default function Models() {
     setItems(rows);
   }, [models]);
 
-  // helpers
   const asMsg = (e, fallback) => {
     const d = e?.response?.data;
     const detail = d?.detail;
@@ -127,9 +122,8 @@ export default function Models() {
   const onAction = (modelKey, actionKey) => {
     const row = items.find((r) => r.key === modelKey);
     setPendingAction({ modelKey, actionKey, modelId: row?._model?.id });
-    // scegli campi del modal
-    if (actionKey === "ft-train") setModalMode("fineTune");
-    else setModalMode("zeroShotSave");
+    if (actionKey === "ft-train") setOkText("Avvia fine-tuning");
+    else setOkText("Avvia & salva CSV");
     openPicker();
   };
 
@@ -158,13 +152,11 @@ export default function Models() {
     setMsg(`Job ${rid}: timeout in attesa del risultato.`);
   };
 
-  const onPickConfirm = async (payload) => {
+  const onPickConfirm = async ({ datasetId, horizon, context_len, epochs }) => {
     setPicking(false);
-    const { datasetId, horizon, context_len, epochs } = payload || {};
 
-    const H = Number.isFinite(+horizon) ? parseInt(horizon, 10) : 30;
-    const C = Number.isFinite(+context_len) ? parseInt(context_len, 10) : 512;
-    const E = Number.isFinite(+epochs) ? parseInt(epochs, 10) : 1;
+    const H = Number.isFinite(Number(horizon)) ? parseInt(horizon, 10) : 30;
+    const C = Number.isFinite(Number(context_len)) ? parseInt(context_len, 10) : 64;
 
     try {
       setRunId(null);
@@ -177,18 +169,7 @@ export default function Models() {
         return;
       }
 
-      // AutoTS
-      if (a.modelKey === "autots" && a.actionKey === "auto-train") {
-        setMsg("AutoTS in esecuzione…");
-        const { data } = await api.post("/train", { dataset_id: datasetId, horizon: H });
-        const rid = data?.job_id;
-        if (!rid) throw new Error("Risposta senza job_id");
-        setRunId(rid);
-        await pollRun(rid);
-        return;
-      }
-
-      // Lag-Llama FOUNDATION
+      // Foundation
       if (a.modelKey.startsWith("fm:")) {
         if (a.actionKey === "zz-save") {
           setMsg("Zero-shot → salvataggio CSV…");
@@ -201,25 +182,20 @@ export default function Models() {
         }
         if (a.actionKey === "ft-train") {
           setMsg("Fine-tuning in esecuzione…");
-          const { data } = await llamaFinetune({ dataset_id: datasetId, epochs: E });
+          const { data } = await llamaFinetune({ dataset_id: datasetId, epochs: Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5 });
           setStatus("SUCCESS");
           setMsg(`Fine-tuning completato. Nuovo modello: ${data?.model_id || "?"}`);
-          // opzionale: ricarica lista modelli
-          // const r = await listModels(); setModels(Array.isArray(r.data) ? r.data : []);
+          try {
+            const { data: reload } = await listModels();
+            setModels(Array.isArray(reload) ? reload : []);
+          } catch {}
           return;
         }
       }
 
-      // Lag-Llama FINE-TUNED
+      // Fine-tuned
       if (a.modelKey.startsWith("ft:")) {
         const id = a.modelId;
-        if (a.actionKey === "ft-preview") {
-          setMsg("Predizione FT (anteprima)...");
-          const { data } = await llamaPredictFT(id, { dataset_id: datasetId, horizon: H, context_len: C });
-          setStatus("SUCCESS");
-          setMsg(`Anteprima FT: [${(data?.head || []).slice(0, 5).map((v) => Number(v).toFixed(3)).join(", ")}]…`);
-          return;
-        }
         if (a.actionKey === "ft-save") {
           setMsg("Predizione FT → salvataggio CSV…");
           const { data } = await llamaPredictFTSave(id, { dataset_id: datasetId, horizon: H, context_len: C });
@@ -265,11 +241,12 @@ export default function Models() {
 
       <DatasetPickerModal
         open={picking}
-        mode={modalMode}
         loading={loadingDs}
         datasets={datasets}
         onClose={() => setPicking(false)}
         onConfirm={onPickConfirm}
+        okText={okText}
+        actionKey={pendingAction?.actionKey}
       />
     </div>
   );
