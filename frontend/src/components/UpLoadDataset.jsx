@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import api from "../lib/api.js";
 
-export default function UploadDataset({ onDone, onCancel }) {
+export default function UpLoadDataset({ onDone, onCancel }) {
   const [file, setFile] = useState(null);
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);

@@ -75,7 +75,7 @@ export default function Login() {
 
         <button disabled={loading}>{loading ? "…" : "Login"}</button>
 
-        <a href="/register">Non hai un account? Registrati</a>
+        <a href="/Register">Non hai un account? Registrati</a>
       </form>
     </div>
   );

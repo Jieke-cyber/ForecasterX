@@ -3,20 +3,19 @@
 from pathlib import Path
 import sys
 
-from sqlalchemy.sql.sqltypes import NULLTYPE
 
 ROOT = Path(__file__).resolve().parents[1]  # .../backend
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # ------------------------------------------------------
 
-import io, uuid, zipfile, tempfile, json, datetime as dt
+import tempfile
 
 from contextlib import asynccontextmanager
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, Depends, BackgroundTasks, HTTPException, status, Response
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Security, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -36,7 +35,6 @@ from .services import save_csv, delete_csv, delete_single_plot, delete_training_
 from .jobs import train_job, _run_lagllama_forecast, _run_lagllama_ft_forecast
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
-from cleanlab.outlier import OutOfDistribution
 
 from .models import User
 from .auth_utils import hash_password, verify_password, create_access_token
@@ -118,7 +116,7 @@ def download_from_bucket(key: str, bucket: str) -> bytes:
 # CORS per sviluppo (React su 5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173",  "http://localhost:8080"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -327,9 +325,9 @@ def _run_lagllama_ft_forecast_and_save(
 def root():
     return RedirectResponse(url="/docs")
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
 @app.post("/datasets/upload")
 def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(get_current_user),):

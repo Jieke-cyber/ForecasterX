@@ -128,7 +128,7 @@ export default function Models() {
   };
 
   const pollRun = async (rid) => {
-    const deadline = Date.now() + 4 * 60 * 1000;
+    const deadline = Date.now() + 6 * 60 * 10000;
     while (Date.now() < deadline) {
       const { data: st } = await api.get(`/train/${rid}`);
       if (st.status === "PENDING" || st.status === "RUNNING") {
@@ -168,6 +168,27 @@ export default function Models() {
         setMsg("Azione non riconosciuta.");
         return;
       }
+
+          // 🔹 AUTO TS (portato dal vecchio ramo)
+    if (a.modelKey === "autots" && a.actionKey === "auto-train") {
+      setMsg("Auto-addestramento e predizione in esecuzione…");
+      // 1) avvia job su /train
+      const { data } = await api.post("/train", {
+        dataset_id: datasetId,
+        horizon: H,        // uso H calcolato sopra (default 30)
+        // se ti serve anche context_len per AutoTS aggiungi:
+        // context_len: C,
+      });
+
+      // compatibile con vecchio (job_id) o nuovo (run_id)
+      const rid = data?.job_id ;
+      if (!rid) throw new Error("Risposta senza job_id / run_id");
+      setRunId(rid);
+
+      // 2) riuso il pollRun già definito nel nuovo file
+      await pollRun(rid);
+      return;
+    }
 
       // Foundation
       if (a.modelKey.startsWith("fm:")) {

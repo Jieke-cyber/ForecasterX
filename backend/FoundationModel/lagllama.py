@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import glob
-import tempfile
+
 from pathlib import Path
 import os
 import numpy as np
@@ -31,6 +31,8 @@ except Exception:
 if add_safe_globals and SAFE_CLASSES:
     add_safe_globals(SAFE_CLASSES)
 
+
+
 # -----------------------------------------------------------------------------
 # (Facoltativo) Patch Lightning: evitiamo che forzi weights_only=True al suo interno
 # -----------------------------------------------------------------------------
@@ -56,7 +58,7 @@ except Exception:
 # GluonTS / Lag-Llama
 # -----------------------------------------------------------------------------
 from gluonts.dataset.common import ListDataset
-from lag_llama.gluon.estimator import LagLlamaEstimator  # percorso coerente con il tuo repo
+from lag_llama.lag_llama.gluon.estimator import LagLlamaEstimator  # percorso coerente con il tuo repo
 
 DEFAULT_CKPT = Path(__file__).resolve().parent / "weights" / "lag-llama.ckpt"
 

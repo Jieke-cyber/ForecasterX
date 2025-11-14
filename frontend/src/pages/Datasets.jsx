@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import DatasetsTable from "../components/DatasetsTable.jsx";
-import UploadDataset from "../components/UploadDataset.jsx";
+import UpLoadDataset from "../components/UpLoadDataset.jsx";
 
 export default function Datasets() {
   const { logout, user } = useAuth();
@@ -85,7 +85,7 @@ const onDelete = async (id) => {
 
       {showUpload && (
         <div style={{ marginTop:12 }}>
-          <UploadDataset onDone={() => { setShowUpload(false); load(); }} onCancel={() => setShowUpload(false)} />
+          <UpLoadDataset onDone={() => { setShowUpload(false); load(); }} onCancel={() => setShowUpload(false)} />
         </div>
       )}
 

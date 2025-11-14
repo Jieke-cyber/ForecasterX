@@ -8,7 +8,7 @@ import Plots from "./pages/Plots.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
 import Models from "./pages/Models.jsx";
-import Jobs from "./pages/jobs.jsx";
+import Jobs from "./pages/Jobs.jsx";
 
 export default function App() {
   return (
