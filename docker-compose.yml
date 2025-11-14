@@ -1,0 +1,25 @@
+# docker-compose.yml
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env         # ✅ backend prende le env da qui
+    ports: ["8000:8000"]
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend                # ✅ Vite leggerà .env.production dal folder frontend
+    ports: ["8080:80"]
+    depends_on: [backend]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports: ["3001:3000"]
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=123456
+      # 👇 QUI installiamo il plugin Infinity
+      - GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
+    volumes:
+      - ./grafana_data:/var/lib/grafana   # salva dashboard e plugin
+    restart: unless-stopped
