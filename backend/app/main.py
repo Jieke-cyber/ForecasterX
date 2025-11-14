@@ -714,6 +714,37 @@ def public_forecast_csv(plot_id: str, db=Depends(get_db)):
         # 4) ritorna CSV
     return Response(content=csv_bytes, media_type="text/csv; charset=utf-8")
 
+@app.get("/public/datasets/{dataset_id}/csv")
+def public_dataset_csv(dataset_id: str, db=Depends(get_db)):
+    # 1) Leggi metadati dal DB
+    row = db.execute(
+        text("""
+            SELECT id, name, path, owner_email
+            FROM public.datasets
+            WHERE id = :id
+        """),
+        {"id": dataset_id}
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Dataset non trovato")
+
+    sb = supa()
+
+    # 2) Path reale del file su Supabase
+    file_path = row.path   # assicurati che nella tabella `datasets` ci sia la colonna `path`
+
+    # 3) Scarica dal bucket
+    try:
+        csv_bytes = sb.storage.from_(SUPABASE_BUCKET).download(file_path)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"CSV non trovato nello storage: {e}")
+
+    if not csv_bytes:
+        raise HTTPException(status_code=404, detail="CSV vuoto o non trovato")
+
+    # 4) Ritorna CSV
+    return Response(content=csv_bytes, media_type="text/csv; charset=utf-8")
 @app.get("/train/{run_id}")
 def get_training_status(run_id: str, db: Session = Depends(get_db)):
     tr = db.get(TrainingRun, run_id)

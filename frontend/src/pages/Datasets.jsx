@@ -33,6 +33,17 @@ export default function Datasets() {
 };
   useEffect(() => { load(); }, []);
 
+  const onPlot = (id) => {
+  const GRAFANA = import.meta.env.VITE_GRAFANA_BASE;     // es: http://localhost:3000
+  const UID     = import.meta.env.VITE_GRAFANA_DASH_UID;
+  const SLUG    = import.meta.env.VITE_GRAFANA_DASH_SLUG;
+  const API     = import.meta.env.VITE_API_BASE;          // es: http://127.0.0.1:8000
+
+  const csvUrl = `${API}/public/datasets/${encodeURIComponent(id)}/csv`;
+  const qs = new URLSearchParams({ "var-csv_url": csvUrl, from: "now-7d", to: "now" });
+
+  window.open(`${GRAFANA}/d/${UID}/${SLUG}?${qs.toString()}`, "_blank", "noopener,noreferrer");
+};
   const onClean = async (id) => {
   if (!id) return setMsg("ID mancante.");
   setMsg(null);
@@ -93,7 +104,7 @@ const onDelete = async (id) => {
 
       {loading
         ? <p>Caricamento…</p>
-        : <DatasetsTable items={items} onClean={onClean} onImpute={onImpute} onDelete={onDelete}/>}
+        : <DatasetsTable items={items} onPlot={onPlot} onClean={onClean} onImpute={onImpute} onDelete={onDelete}/>}
     </div>
   );
 }

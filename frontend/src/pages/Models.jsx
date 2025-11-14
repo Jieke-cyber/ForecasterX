@@ -128,7 +128,7 @@ export default function Models() {
   };
 
   const pollRun = async (rid) => {
-    const deadline = Date.now() + 6 * 60 * 10000;
+    const deadline = Date.now() + 12 * 60 * 10000;
     while (Date.now() < deadline) {
       const { data: st } = await api.get(`/train/${rid}`);
       if (st.status === "PENDING" || st.status === "RUNNING") {

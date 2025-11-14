@@ -15,6 +15,7 @@ export default function UpLoadDataset({ onDone, onCancel }) {
       setMsg("Il file deve essere .csv"); return;
     }
 
+
     const form = new FormData();
     // ⚠️ il nome "file" deve coincidere con il parametro FastAPI: file: UploadFile = File(...)
     form.append("file", file);
@@ -35,7 +36,7 @@ export default function UpLoadDataset({ onDone, onCancel }) {
 
   return (
     <form onSubmit={onSubmit} style={{ display:"grid", gap:12, border:"1px solid #eee", padding:12, borderRadius:8 }}>
-      <strong>Carica dataset (.csv)</strong>
+      <strong>Carica dataset (.csv)(Assicurare che il dataset abbia come la prima e la seconda colonna nominato "ds" e "value" rispettivamente)</strong>
       <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
       {msg && <small style={{ color: msg.includes("successo") ? "green" : "crimson" }}>{msg}</small>}
       <div style={{ display:"flex", gap:8 }}>
