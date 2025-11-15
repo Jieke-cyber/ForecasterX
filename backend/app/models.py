@@ -29,7 +29,7 @@ class TrainingRun(Base):
 class ForecastPlot(Base):
     __tablename__ = "forecast_plots"
     id = Column(String, primary_key=True)
-    training_run_id = Column(String, ForeignKey("training_runs.id"), nullable=False)
+    training_run_id = Column(String, ForeignKey("training_runs.id"), nullable=True)
     name = Column(String, nullable=False)        # es. forecast_<run>.csv
     path = Column(String, nullable=False)        # chiave o URL del CSV nello storage
     created_at = Column(DateTime, server_default=func.now())

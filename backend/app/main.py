@@ -32,7 +32,7 @@ from .db import Base, engine, get_db, SessionLocal
 from .models import Dataset, TrainingRun, ForecastPlot, Model
 from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn
 from .services import save_csv, delete_csv, delete_single_plot, delete_training_run
-from .jobs import train_job, _run_lagllama_forecast, _run_lagllama_ft_forecast
+from .jobs import train_job, _run_lagllama_forecast
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
 
@@ -44,14 +44,24 @@ from FoundationModel.lagllama import predict_series, predict_series_with_predict
     load_predictor_from_ckpt, finetune_and_dump_ckpt
 
 
+from .models_runtime.pypots_runtime import (
+    preload_pypots_models,
+    PYPOTS_MODELS, get_pypots_model, predict_future,
+)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ---- STARTUP ----
-    db: Session = SessionLocal()
+    db = SessionLocal()
     try:
-        fm = db.query(Model).filter(Model.name=="Lag-Llama", Model.kind=="foundation").first()
+        # ----------------------------------------------------
+        # 1) Lag-Llama foundation: assicuro che esista nel DB
+        # ----------------------------------------------------
+        fm = (
+            db.query(Model)
+            .filter(Model.name == "Lag-Llama", Model.kind == "foundation")
+            .first()
+        )
         if not fm:
-            db.add(Model(
+            fm = Model(
                 name="Lag-Llama",
                 kind="foundation",
                 base_model="lag-llama",
@@ -60,12 +70,89 @@ async def lifespan(app: FastAPI):
                 metrics_json={},
                 owner_email=None,
                 status="AVAILABLE",
-            ))
+            )
+            db.add(fm)
             db.commit()
+        # ----------------------------------------------------
+        # 2) Preload modelli PyPOTS (ricostruzione da .pt)
+        # ----------------------------------------------------
+        preload_pypots_models()
+
+        # opzionale, ma comodo: esporre la cache anche in app.state
+        app.state.pypots_models = PYPOTS_MODELS
+
+        # ----------------------------------------------------
+        # 3) Registrazione dei modelli PyPOTS nella tabella models
+        # ----------------------------------------------------
+        for key, bundle in PYPOTS_MODELS.items():
+            artifact = bundle["artifact"]
+            pattern = artifact.get("pattern", key)
+            model_type = artifact.get("model_type", "unknown")
+            path = bundle["path"]
+            L = bundle["L"]
+            H = bundle["H"]
+            metrics = artifact.get("metrics", {})
+            init_kwargs = artifact.get("init_kwargs", {})
+
+            # nome nel DB: puoi usare key, oppure pattern, o qualcos'altro
+            name = key                   # es: "pattern1_DLinear"
+            kind = "pypots"              # tipo di modello (scelta tua)
+            base_model = model_type      # es: "DLinear"
+
+            # quello che vuoi avere come json di parametri
+            params_json = {
+                "pattern": pattern,
+                "model_type": model_type,
+                "L": L,
+                "H": H,
+                "init_kwargs": init_kwargs,
+            }
+
+            metrics_json = metrics or {}
+
+            # cerco se esiste già una riga per questo modello
+            db_model = (
+                db.query(Model)
+                .filter(Model.name == name, Model.kind == kind)
+                .first()
+            )
+
+            if not db_model:
+                # creazione nuovo record
+                db_model = Model(
+                    name=name,
+                    kind=kind,
+                    base_model=base_model,
+                    storage_path=path,
+                    params_json=params_json,
+                    metrics_json=metrics_json,
+                    owner_email=None,      # o chi vuoi
+                    status="AVAILABLE",
+                )
+                db.add(db_model)
+                print(f"[Startup] Creato record models per '{name}'")
+            else:
+                # update dati esistenti
+                db_model.base_model = base_model
+                db_model.storage_path = path
+                db_model.params_json = params_json
+                db_model.metrics_json = metrics_json
+                db_model.status = "AVAILABLE"
+                print(f"[Startup] Aggiornato record models per '{name}'")
+
+        db.commit()
+
     finally:
         db.close()
 
+    # ---- qui l'app è pronta ----
     yield
+
+    # ---- SHUTDOWN ----
+    PYPOTS_MODELS.clear()
+    if hasattr(app.state, "pypots_models"):
+        app.state.pypots_models.clear()
+
 app = FastAPI(title="TS WebApp Backend (MVP)", lifespan=lifespan)
 
 security = HTTPBearer()
@@ -1015,3 +1102,131 @@ def list_models(
         }
         for r in rows
     ]
+
+class PyPotsForecastBody(BaseModel):
+    dataset_id: str
+    horizon: int
+
+@app.post("/pypots/{model_id}/forecast-csv")
+def pypots_forecast_csv(
+    model_id : str,
+    payload: PyPotsForecastBody,
+    db: Session = Depends(get_db),
+
+):
+    """
+    Usa un modello PyPOTS scelto tramite id (tabella models.id)
+    per fare forecast su un CSV (Date,Value), salva il CSV su Supabase
+    e crea un record in forecast_plots. Ritorna anche i dati in JSON.
+    """
+    # 1) Recupero il record dal DB (modello PyPOTS)
+    db_model = (
+        db.query(Model)
+        .filter(Model.id == model_id, Model.kind == "pypots")
+        .first()
+    )
+
+    if not db_model:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Modello con id={model_id} non trovato o non è di tipo 'pypots'",
+        )
+
+    model_key = str(db_model.name).strip()# es: "pattern1_DLinear"
+
+    # 2) Prendo il bundle modello+scaler dalla cache runtime
+    try:
+        bundle = get_pypots_model(model_key)
+    except KeyError:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Modello runtime '{model_key}' non presente in cache (problema di startup?)",
+        )
+
+    model = bundle["model"]
+    scaler = bundle["scaler"]
+    L = bundle["L"]
+    H = min(bundle["H"], payload.horizon)
+
+    # 3) Leggo il CSV inviato
+    df, ds_row = _load_dataset_as_df(db, payload.dataset_id)
+    if df is None or df.empty:
+        raise RuntimeError("Dataset vuoto o non trovato")
+
+    df = df.sort_values("ds")
+    owner_email = (str(ds_row.owner_email) if ds_row and ds_row.owner_email else "").strip()
+    df = (
+        df.dropna(subset=["ds", "value"])
+          .drop_duplicates(subset=["ds"], keep="last")
+          .sort_values("ds")
+          .reset_index(drop=True)
+    )
+    if len(df) < L:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Serie troppo corta: servono almeno L={L} punti, ne hai {len(df)}",
+        )
+
+    # 4) Preparo la finestra come nel tuo script offline
+    y = df["value"].astype("float32").values.reshape(-1, 1)
+    ys = scaler.transform(y)          # [T, 1]
+    x_last = ys[-L:, :][None, ...]    # [1, L, 1]
+
+    # 5) Previsione in scala normalizzata + inverse transform
+    pred_scaled = predict_future(model, x_last, H)
+    pred = scaler.inverse_transform(pred_scaled.reshape(-1, 1)).reshape(-1)
+
+    # 6) Costruisco history + future con colonna kind
+    history_df = df[["ds", "value"]].copy()
+    history_df["kind"] = "history"
+
+    last_date = df["ds"].iloc[-1]
+    future_dates = pd.date_range(
+        start=last_date + pd.Timedelta(days=1),
+        periods=H,
+        freq="D",   # se vuoi puoi inferire la freq reale
+    )
+    future_df = pd.DataFrame({
+        "ds": future_dates,
+        "value": pred,
+    })
+    future_df["kind"] = "future"
+
+    combined_df = pd.concat([history_df, future_df], ignore_index=True)
+
+    # 7) Salva il CSV su Supabase (SENZA TrainingRun)
+    csv_bytes = combined_df.to_csv(index=False).encode("utf-8")
+    client = supa()
+
+    plot_id = str(uuid.uuid4())
+    # se vuoi un path per-utente o per-dataset, puoi cambiare questa parte;
+    # qui usiamo solo model_id.
+    object_key = f"pypots/{model_id}/{plot_id}.csv"
+
+    client.storage.from_(SUPABASE_BUCKET).upload(
+        path=object_key,
+        file=csv_bytes,
+        file_options={"content-type": "text/csv", "upsert": "true"},
+    )
+
+    # 8) Crea il record in forecast_plots
+    # NB: training_run_id e owner_email li lasciamo None: i job NON sono usati per le previsioni.
+    db.add(ForecastPlot(
+        id=plot_id,
+        training_run_id=None,
+        name=f"PyPOTS {db_model.base_model} forecast (model_id={model_id})",
+        path=object_key,
+        owner_email= owner_email ,
+    ))
+    db.commit()
+
+    # 9) Ritorno JSON con info utili + dati
+    return {
+        "model_id": model_id,
+        "model_key": model_key,
+        "L": L,
+        "H": H,
+        "plot_id": plot_id,
+        "path": object_key,
+        "rows": combined_df.to_dict(orient="records"),
+    }

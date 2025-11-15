@@ -22,3 +22,7 @@ export const llamaFinetune     = (body) => api.post("/lag-llama/finetune", body)
 
 // Fine-tuned
 export const llamaPredictFTSave = (id, body) => api.post(`/lag-llama-ft/${id}/predict/save`, body);
+
+// src/lib/api.js
+export const pypotsPredictSave = (modelId, payload) =>
+  api.post(`/pypots/${modelId}/forecast-csv`, payload);

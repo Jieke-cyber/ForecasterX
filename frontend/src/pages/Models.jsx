@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import api, { listModels } from "../lib/api";
+import api, {listModels, pypotsPredictSave} from "../lib/api";
 import ModelsTable from "../components/ModelsTable.jsx";
 import DatasetPickerModal from "../components/DatasetPickerModal.jsx";
 import { llamaZeroShotSave, llamaFinetune, llamaPredictFTSave } from "../lib/api";
@@ -35,7 +35,7 @@ export default function Models() {
   useEffect(() => {
     const rows = [];
 
-    // AutoTS (rimane uguale se lo usi)
+    // AutoTS
     rows.push({
       key: "autots",
       name: "AutoTS",
@@ -51,6 +51,7 @@ export default function Models() {
       const base = norm(m.base_model);
       const id = m.id;
 
+      // 🔹 Lag-Llama foundation
       if (kind === "foundation" && base === "lag-llama") {
         rows.push({
           key: `fm:${id}`,
@@ -65,6 +66,7 @@ export default function Models() {
         continue;
       }
 
+      // 🔹 Lag-Llama fine-tuned
       if (kind === "fine_tuned" && base === "lag-llama") {
         rows.push({
           key: `ft:${id}`,
@@ -78,6 +80,21 @@ export default function Models() {
         continue;
       }
 
+      // 🔹 PyPOTS (NUOVO BLOCCO)
+      if (kind === "pypots") {
+        rows.push({
+          key: `pyp:${id}`,
+          name: m.name || `PyPOTS (${m.base_model || id})`,
+          description: `PyPOTS (${m.base_model ?? "?"}) – L=${m.params_json?.L ?? "?"}, H=${m.params_json?.H ?? "?"}`,
+          actions: [
+            { key: "pyp-save", label: "PyPOTS → salva CSV" },
+          ],
+          _model: m,
+        });
+        continue;
+      }
+
+      // Tutto il resto
       other.push(m);
     }
 
@@ -122,8 +139,16 @@ export default function Models() {
   const onAction = (modelKey, actionKey) => {
     const row = items.find((r) => r.key === modelKey);
     setPendingAction({ modelKey, actionKey, modelId: row?._model?.id });
-    if (actionKey === "ft-train") setOkText("Avvia fine-tuning");
-    else setOkText("Avvia & salva CSV");
+
+    if (actionKey === "ft-train") {
+      setOkText("Avvia fine-tuning");
+    } else if (actionKey === "pyp-save") {
+      // 🔹 testo del bottone di conferma per PyPOTS
+      setOkText("Avvia PyPOTS");
+    } else {
+      setOkText("Avvia & salva CSV");
+    }
+
     openPicker();
   };
 
@@ -169,28 +194,22 @@ export default function Models() {
         return;
       }
 
-          // 🔹 AUTO TS (portato dal vecchio ramo)
-    if (a.modelKey === "autots" && a.actionKey === "auto-train") {
-      setMsg("Auto-addestramento e predizione in esecuzione…");
-      // 1) avvia job su /train
-      const { data } = await api.post("/train", {
-        dataset_id: datasetId,
-        horizon: H,        // uso H calcolato sopra (default 30)
-        // se ti serve anche context_len per AutoTS aggiungi:
-        // context_len: C,
-      });
+      // 🔹 AUTO TS
+      if (a.modelKey === "autots" && a.actionKey === "auto-train") {
+        setMsg("Auto-addestramento e predizione in esecuzione…");
+        const { data } = await api.post("/train", {
+          dataset_id: datasetId,
+          horizon: H,
+        });
 
-      // compatibile con vecchio (job_id) o nuovo (run_id)
-      const rid = data?.job_id ;
-      if (!rid) throw new Error("Risposta senza job_id / run_id");
-      setRunId(rid);
+        const rid = data?.job_id;
+        if (!rid) throw new Error("Risposta senza job_id / run_id");
+        setRunId(rid);
+        await pollRun(rid);
+        return;
+      }
 
-      // 2) riuso il pollRun già definito nel nuovo file
-      await pollRun(rid);
-      return;
-    }
-
-      // Foundation
+      // 🔹 Foundation
       if (a.modelKey.startsWith("fm:")) {
         if (a.actionKey === "zz-save") {
           setMsg("Zero-shot → salvataggio CSV…");
@@ -203,7 +222,10 @@ export default function Models() {
         }
         if (a.actionKey === "ft-train") {
           setMsg("Fine-tuning in esecuzione…");
-          const { data } = await llamaFinetune({ dataset_id: datasetId, epochs: Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5 });
+          const { data } = await llamaFinetune({
+            dataset_id: datasetId,
+            epochs: Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5,
+          });
           setStatus("SUCCESS");
           setMsg(`Fine-tuning completato. Nuovo modello: ${data?.model_id || "?"}`);
           try {
@@ -214,12 +236,16 @@ export default function Models() {
         }
       }
 
-      // Fine-tuned
+      // 🔹 Fine-tuned Lag-Llama
       if (a.modelKey.startsWith("ft:")) {
         const id = a.modelId;
         if (a.actionKey === "ft-save") {
           setMsg("Predizione FT → salvataggio CSV…");
-          const { data } = await llamaPredictFTSave(id, { dataset_id: datasetId, horizon: H, context_len: C });
+          const { data } = await llamaPredictFTSave(id, {
+            dataset_id: datasetId,
+            horizon: H,
+            context_len: C,
+          });
           const rid = data?.run_id;
           if (!rid) throw new Error("Risposta senza run_id");
           setRunId(rid);
@@ -227,6 +253,27 @@ export default function Models() {
           return;
         }
       }
+
+      // 🔹 PyPOTS (NUOVO RAMO)
+      // PyPOTS
+      if (a.modelKey.startsWith("pyp:")) {
+        const id = a.modelId;
+
+        if (a.actionKey === "pyp-save") {
+          setMsg("Predizione PyPOTS → salvataggio CSV…");
+
+          const { data } = await pypotsPredictSave(id, {
+            dataset_id: datasetId,
+            horizon: H,
+          });
+
+          const n = Array.isArray(data?.rows) ? data.rows.length : "?";
+          setStatus("SUCCESS");
+          setMsg(`Predizione PyPOTS completata. Righe restituite: ${n}`);
+          return;
+        }
+      }
+
 
       setStatus("FAILURE");
       setMsg("Azione non riconosciuta.");
