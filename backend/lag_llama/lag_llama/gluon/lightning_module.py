@@ -26,9 +26,9 @@ from gluonts.itertools import prod
 from gluonts.torch.modules.loss import DistributionLoss, NegativeLogLikelihood
 from gluonts.torch.util import repeat_along_dim, take_last
 
-from ..data.augmentations.freq_mask import freq_mask
-from ..data.augmentations.freq_mix import freq_mix
-from ..data.augmentations.augmentations import (
+from lag_llama.data.augmentations.freq_mask import freq_mask
+from lag_llama.data.augmentations.freq_mix import freq_mix
+from lag_llama.data.augmentations.augmentations import (
     ApplyAugmentations,
     Jitter,
     MagnitudeWarp,
