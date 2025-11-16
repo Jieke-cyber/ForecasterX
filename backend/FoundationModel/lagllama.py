@@ -58,8 +58,12 @@ except Exception:
 # GluonTS / Lag-Llama
 # -----------------------------------------------------------------------------
 from gluonts.dataset.common import ListDataset
-from lag_llama.lag_llama.gluon.estimator import LagLlamaEstimator  # percorso coerente con il tuo repo
-
+try:
+    # Percorso corretto quando il package è installato (Render, Docker, ecc.)
+    from lag_llama.gluon.estimator import LagLlamaEstimator
+except ModuleNotFoundError:
+    # Fallback per l’ambiente locale se davvero ti serve il path vecchio
+    from lag_llama.lag_llama.gluon.estimator import LagLlamaEstimator
 DEFAULT_CKPT = Path(__file__).resolve().parent / "weights" / "lag-llama.ckpt"
 
 # cache in memoria per predictor parametrizzati
