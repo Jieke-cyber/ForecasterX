@@ -28,3 +28,13 @@ version = {file = "VERSION"}
 package-data = {"data" = ["data/*"], "configs" = ["configs/*"]}
 
 [tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "lag_llama*",
+  "data*",
+  "configs*",
+  "gluon_utils*",
+  "images*",
+  "scripts*",
+  "utils*"
+]
