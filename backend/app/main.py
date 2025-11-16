@@ -3,6 +3,7 @@
 from pathlib import Path
 import sys
 
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]  # .../backend
 if str(ROOT) not in sys.path:
@@ -48,6 +49,7 @@ from .models_runtime.pypots_runtime import (
     preload_pypots_models,
     PYPOTS_MODELS, get_pypots_model, predict_future,
 )
+load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = SessionLocal()
@@ -200,10 +202,20 @@ def download_from_bucket(key: str, bucket: str) -> bytes:
     # supabase-py qui ti restituisce direttamente i bytes
     return client.storage.from_(bucket).download(key)
 
+origins = [
+    "http://localhost:5173",
+    "http://localhost:8080"
+]
+
+client_origin_url = os.getenv("CLIENT_ORIGIN")
+
+if client_origin_url:
+    origins.append(client_origin_url)
+
 # CORS per sviluppo (React su 5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173",  "http://localhost:8080"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
