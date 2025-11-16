@@ -964,8 +964,8 @@ def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int,
         db.close()
 
 # ---------- FINETUNE: crea ZIP nello Storage + riga in models ----------
-@app.post("/lag-llama/finetune")
-def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db), current_user = Depends(get_current_user),):
+@app.post("/lag-llama/{model_id}/finetune")
+def lag_llama_finetune(model_id: str ,payload: FinetuneIn, db: Session = Depends(get_db), current_user = Depends(get_current_user),):
 
     owner_email = str(current_user.email).strip().lower()
     df, _ = _load_dataset_as_df(db, payload.dataset_id)
@@ -981,6 +981,25 @@ def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db), curre
         freq = None
     freq = freq or "D"
 
+    run_id = str(uuid.uuid4())
+    db.add(TrainingRun(
+        id=run_id,
+        dataset_id=str(payload.dataset_id),
+        status="PENDING",
+        metrics_json={},
+        error=None,
+        model_id_used=model_id,
+    ))
+    db.commit()
+    run = db.get(TrainingRun, run_id)
+
+    if not run:
+        run.status = "FAILURE"
+        db.commit()
+        return
+    run.status = "RUNNING"
+    db.commit()
+
     # 1) FINE-TUNING → ckpt path locale
     ckpt_path = finetune_and_dump_ckpt(
         values=values,
@@ -995,8 +1014,8 @@ def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db), curre
     )
 
     # 2) Upload ckpt su Supabase
-    model_id = str(uuid.uuid4())
-    object_key = f"models/{model_id}/weights.ckpt"
+    ffmodel_id = str(uuid.uuid4())
+    object_key = f"models/{ffmodel_id}/weights.ckpt"
     with open(ckpt_path, "rb") as f:
         blob = f.read()
     supa().storage.from_(SUPABASE_BUCKET).upload(
@@ -1007,7 +1026,7 @@ def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db), curre
 
     # 3) Inserisci riga in DB
     m = Model(
-        id=model_id,
+        id=ffmodel_id,
         name="Lag-Llama FT",
         kind="fine_tuned",
         base_model="lag-llama",
@@ -1026,6 +1045,18 @@ def lag_llama_finetune(payload: FinetuneIn, db: Session = Depends(get_db), curre
         status="AVAILABLE",
     )
     db.add(m)
+    db.commit()
+
+    run.status = "SUCCESS"
+    meta = (run.metrics_json or {})
+    meta.update({
+        "model": "Lag-Llama fine-tuned",
+        "horizon": payload.horizon,
+        "context_len": payload.context_len,
+        "freq": freq,
+        "model_id_used": ffmodel_id,
+    })
+    run.metrics_json = meta
     db.commit()
 
     return {"model_id": m.id, "storage_path": m.storage_path}
@@ -1214,7 +1245,7 @@ def pypots_forecast_csv(
     db.add(ForecastPlot(
         id=plot_id,
         training_run_id=None,
-        name=f"PyPOTS {db_model.base_model} forecast (model_id={model_id})",
+        name=f"{ds_row.name} ({db_model.base_model})",
         path=object_key,
         owner_email= owner_email ,
     ))

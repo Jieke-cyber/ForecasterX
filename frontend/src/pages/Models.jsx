@@ -20,6 +20,14 @@ export default function Models() {
   const [loadingDs, setLoadingDs] = useState(false);
   const [pendingAction, setPendingAction] = useState(null); // { modelKey, actionKey, modelId? }
   const [okText, setOkText] = useState("Conferma");
+  const PYPOTS_DESCRIPTIONS = {
+  pattern1_TimesNet: "Vendite annuali di un prodotto in crescita con picchi fissi. (Trend lineare + stagionalità annuale)",
+  pattern2_TimesNet: "Traffico a un sito. (Stagionalità: settimanale + annuale)",
+  pattern3_TimesNet: "Fatturato con chiusure contabili mensili e picchi ricorrenti in alcuni mesi dell’anno. (Stagionalità mensile + annuale)",
+  pattern4_TimesNet: "Crescita utenti di una piattaforma digitale con forte espansione nel tempo e ciclicità stagionale. (Trend esponenziale + stagionalità annuale)",
+  pattern5_TimesNet: "Serie di tipo finanziario dove prevale la volatilità e non c’è una stagionalità stabile. (Rumore rosso / alta volatilità)",
+  // aggiungi qui altri base_model se ne hai
+};
 
   useEffect(() => {
     (async () => {
@@ -82,10 +90,21 @@ export default function Models() {
 
       // 🔹 PyPOTS (NUOVO BLOCCO)
       if (kind === "pypots") {
+        const base = m.base_model ?? id;
+        const modelName = m.name || `PyPOTS (${base})`;
+
+        // descrizione custom, se esiste; altrimenti fallback generico
+        const extraDesc = PYPOTS_DESCRIPTIONS[modelName];
+
+        const desc =
+          extraDesc
+            ? `${extraDesc} (L=${m.params_json?.L ?? "?"}, H=${m.params_json?.H ?? "?"})`
+            : `(${base}) – L=${m.params_json?.L ?? "?"}, H=${m.params_json?.H ?? "?"}`;
+
         rows.push({
           key: `pyp:${id}`,
-          name: m.name || `PyPOTS (${m.base_model || id})`,
-          description: `PyPOTS (${m.base_model ?? "?"}) – L=${m.params_json?.L ?? "?"}, H=${m.params_json?.H ?? "?"}`,
+          name: m.name || `PyPOTS (${base})`,
+          description: desc,
           actions: [
             { key: "pyp-save", label: "PyPOTS → salva CSV" },
           ],
@@ -211,6 +230,7 @@ export default function Models() {
 
       // 🔹 Foundation
       if (a.modelKey.startsWith("fm:")) {
+        const id = a.modelId;
         if (a.actionKey === "zz-save") {
           setMsg("Zero-shot → salvataggio CSV…");
           const { data } = await llamaZeroShotSave({ dataset_id: datasetId, horizon: H, context_len: C });
@@ -222,7 +242,7 @@ export default function Models() {
         }
         if (a.actionKey === "ft-train") {
           setMsg("Fine-tuning in esecuzione…");
-          const { data } = await llamaFinetune({
+          const { data } = await llamaFinetune(id, {
             dataset_id: datasetId,
             epochs: Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5,
           });

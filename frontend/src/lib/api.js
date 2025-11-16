@@ -18,7 +18,7 @@ export const listModels = () => api.get("/models");
 
 // Foundation
 export const llamaZeroShotSave = (body) => api.post("/lag-llama/predict/save", body);
-export const llamaFinetune     = (body) => api.post("/lag-llama/finetune", body);
+export const llamaFinetune     = (id ,body) => api.post(`/lag-llama/${id}/finetune`, body);
 
 // Fine-tuned
 export const llamaPredictFTSave = (id, body) => api.post(`/lag-llama-ft/${id}/predict/save`, body);
