@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+
 
 # Copia requirements nel container
 COPY requirements.txt /app/requirements.txt
@@ -27,7 +29,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY lag_llama /app/lag_llama
-RUN pip install /app/lag_llama
+
 
 
 # Codice applicazione
