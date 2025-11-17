@@ -48,7 +48,9 @@ export default function DatasetPickerModal({
 
   const show = useMemo(() => {
     if (actionKey === "ft-train") return { hor: false, ctx: false, ep: true };
-    return { hor: true, ctx: true, ep: false }; // zz-save & ft-save
+    if (actionKey === "zz-save")return { hor: true, ctx: true, ep: false };
+    if (actionKey === "pyp-save")return { hor: true, ctx: false, ep: false };
+    return { hor: true, ctx: false, ep: false } // zz-save & ft-save
   }, [actionKey]);
 
   const title = useMemo(() => {
