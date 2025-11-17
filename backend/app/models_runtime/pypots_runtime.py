@@ -1,32 +1,47 @@
 # app/models_runtime/pypots_runtime.py
-
+import os
 from pathlib import Path
 from typing import Dict, Any
 import logging
-
 import torch
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from pypots.forecasting import DLinear, TimesNet, FITS
 
 # 1. Ottieni la directory del file corrente (es. .../app/models_runtime)
-CURRENT_DIR = Path(__file__).resolve().parent
-
-# 2. Sali fino alla cartella 'backend'
-#    (da .../app/models_runtime -> .../app -> .../backend)
-BACKEND_DIR = CURRENT_DIR.parent.parent
-
-# 3. Definisci il percorso corretto per la cartella Modelli
-ARTIFACT_DIR = BACKEND_DIR / "Modelli"
-
-# 4. Aggiungi un log per il debug (lo vedrai nei log di Render)
-logger = logging.getLogger(__name__)
-logger.info(f"[PyPOTS_Runtime] Percorso 'Modelli' impostato su: {ARTIFACT_DIR}")
-
-# --- Fine Modifica Path ---
-
-
+ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "Modelli"
 PYPOTS_MODELS: dict[str, dict] = {}
+
+# --- 4. AGGIUNGI QUESTO BLOCCO DI DEBUG ---
+# Usiamo print() con flush=True per essere sicuri di vederlo nei log di Render
+print("=" * 40, flush=True)
+print("--- [DEBUG RUNTIME] Inizio preload modelli PyPOTS ---", flush=True)
+print(f"--- [DEBUG RUNTIME] Percorso __file__: {__file__}", flush=True)
+
+# Testiamo diversi livelli di 'parents'
+try:
+    p0 = Path(__file__).resolve().parent
+    print(f"--- [DEBUG RUNTIME] parents[0] (dir file): {p0}", flush=True)
+
+    p1 = Path(__file__).resolve().parents[1]
+    print(f"--- [DEBUG RUNTIME] parents[1] (app?): {p1}", flush=True)
+
+    p2 = Path(__file__).resolve().parents[2]
+    print(f"--- [DEBUG RUNTIME] parents[2] (backend?): {p2}", flush=True)
+
+    print(f"--- [DEBUG RUNTIME] Contenuto di parents[2] ({p2}):", flush=True)
+    for p in os.listdir(p2):
+        print(f"    -> {p}", flush=True)
+
+except Exception as e:
+    print(f"    -> Errore nel listdir: {e}", flush=True)
+
+print(f"--- [DEBUG RUNTIME] Percorso ARTIFACT_DIR calcolato: {ARTIFACT_DIR}", flush=True)
+print(f"--- [DEBUG RUNTIME] ARTIFACT_DIR esiste? {ARTIFACT_DIR.exists()}", flush=True)
+print("=" * 40, flush=True)
+
+
+# --- FINE BLOCCO DEBUG ---
 
 
 def load_artifact(path):
