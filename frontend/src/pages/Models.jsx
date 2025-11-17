@@ -233,11 +233,17 @@ export default function Models() {
         const id = a.modelId;
         if (a.actionKey === "zz-save") {
           setMsg("Zero-shot → salvataggio CSV…");
+
+          // --- MODIFICA ---
+          // Chiamiamo l'API, che ora risponde direttamente con il risultato
           const { data } = await llamaZeroShotSave({ dataset_id: datasetId, horizon: H, context_len: C });
-          const rid = data?.run_id;
-          if (!rid) throw new Error("Risposta senza run_id");
-          setRunId(rid);
-          await pollRun(rid);
+
+          // Gestiamo la risposta sincrona (come PyPOTS)
+          const n = data?.rows ? data.rows : "?";
+          const plotId = data?.plot_id ? data.plot_id : "?";
+
+          setStatus("SUCCESS");
+          setMsg(`Predizione Zero-shot completata. Righe: ${n}. Plot: ${plotId}`);
           return;
         }
         if (a.actionKey === "ft-train") {

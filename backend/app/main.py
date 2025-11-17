@@ -1,5 +1,6 @@
 # app/main.py
 # --- add at top of app/main.py before other imports ---
+import logging
 from pathlib import Path
 import sys
 
@@ -922,59 +923,50 @@ def _infer_freq(ds_col: pd.Series) -> str:
 # ---------- ZERO-SHOT: salvataggio CSV (history+forecast) ----------
 @app.post("/lag-llama/predict/save")
 def lag_llama_predict_and_save(payload: ZeroShotPredictIn,
-                               background: BackgroundTasks,
                                db: Session = Depends(get_db)):
-    run_id = str(uuid.uuid4())
-    db.add(TrainingRun(id=run_id, dataset_id=str(payload.dataset_id), status="PENDING",
-                       metrics_json={}, error=None))
-    db.commit()
-    background.add_task(_run_lagllama_forecast, SessionLocal, run_id,
-                        str(payload.dataset_id), int(payload.horizon), int(payload.context_len))
-    return {"run_id": run_id}
+    # --- MODIFICA ---
+    # Non creiamo più un TrainingRun (Job) e non usiamo BackgroundTasks.
+    # Eseguiamo la logica direttamente.
 
-def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int, context_len: int):
-    db: Session = db_maker()
     try:
-        run = db.get(TrainingRun, run_id); run.status="RUNNING"; db.commit()
-        df, ds_row = _load_dataset_as_df(db, dataset_id)
+        # Questa è la logica che prima era in _run_lagllama_forecast
+
+        df, ds_row = _load_dataset_as_df(db, str(payload.dataset_id))
         owner_email = str(ds_row.owner_email).strip().lower()
 
         s = pd.Series(df["value"].values, index=df["ds"])
-        yhat = predict_series(s, horizon, context_len)
+        yhat = predict_series(s, int(payload.horizon), int(payload.context_len))
         future_index = pd.date_range(df["ds"].max() + pd.tseries.frequencies.to_offset(_infer_freq(df["ds"])),
-                                     periods=horizon)
-        fut = pd.DataFrame({"ds": future_index, "value": yhat[:horizon], "kind": "forecast"})
+                                     periods=int(payload.horizon))
+        fut = pd.DataFrame({"ds": future_index, "value": yhat[:int(payload.horizon)], "kind": "forecast"})
         hist = df.assign(kind="history")
         combined = pd.concat([hist, fut], ignore_index=True)
 
         csv_bytes = combined.to_csv(index=False).encode("utf-8")
         client = supa()
         plot_id = str(uuid.uuid4())
-        safe_owner = owner_email.replace("@","_at_")
-        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
+        safe_owner = owner_email.replace("@", "_at_")
+        object_key = f"{safe_owner}/{str(payload.dataset_id)}/{plot_id}.csv"
         client.storage.from_(SUPABASE_BUCKET).upload(
             path=object_key, file=csv_bytes,
-            file_options={"content-type":"text/csv","upsert":"true"}
+            file_options={"content-type": "text/csv", "upsert": "true"}
         )
 
-        db.add(ForecastPlot(id=plot_id, training_run_id=run_id,
+        # Creiamo il plot, ma lo associamo a training_run_id=None
+        # Assicurati che la colonna `training_run_id` nella tabella `forecast_plots`
+        # accetti valori NULL.
+        db.add(ForecastPlot(id=plot_id, training_run_id=None,
                             name=f"{ds_row.name} (Lag-Llama forecast)",
                             path=object_key, owner_email=owner_email))
-
-        fm = db.query(Model).filter(Model.name=="Lag-Llama", Model.kind=="foundation").first()
-        run.status="SUCCESS"
-        run.metrics_json = (run.metrics_json or {}) | {"note":"Lag-Llama foundation",
-                                                       "horizon":horizon, "context_len":context_len}
-        if hasattr(run, "model_id_used") and fm:
-            run.model_id_used = fm.id
         db.commit()
-    except Exception as e:
-        run = db.get(TrainingRun, run_id)
-        if run: run.status="FAILURE"; run.error=str(e); db.commit()
-        raise
-    finally:
-        db.close()
 
+        # Restituiamo direttamente il plot_id e il numero di righe
+        return {"plot_id": plot_id, "rows": len(combined)}
+
+    except Exception as e:
+        # Se qualcosa va storto, solleva un errore HTTP 500
+        logging.error(f"Errore in lag_llama_predict_and_save: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 # ---------- FINETUNE: crea ZIP nello Storage + riga in models ----------
 @app.post("/lag-llama/{model_id}/finetune")
 def lag_llama_finetune(model_id: str ,payload: FinetuneIn, db: Session = Depends(get_db), current_user = Depends(get_current_user),):
