@@ -2,13 +2,30 @@
 
 from pathlib import Path
 from typing import Dict, Any
+import logging
 
 import torch
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from pypots.forecasting import DLinear, TimesNet, FITS
 
-ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "Modelli"
+# 1. Ottieni la directory del file corrente (es. .../app/models_runtime)
+CURRENT_DIR = Path(__file__).resolve().parent
+
+# 2. Sali fino alla cartella 'backend'
+#    (da .../app/models_runtime -> .../app -> .../backend)
+BACKEND_DIR = CURRENT_DIR.parent.parent
+
+# 3. Definisci il percorso corretto per la cartella Modelli
+ARTIFACT_DIR = BACKEND_DIR / "Modelli"
+
+# 4. Aggiungi un log per il debug (lo vedrai nei log di Render)
+logger = logging.getLogger(__name__)
+logger.info(f"[PyPOTS_Runtime] Percorso 'Modelli' impostato su: {ARTIFACT_DIR}")
+
+# --- Fine Modifica Path ---
+
+
 PYPOTS_MODELS: dict[str, dict] = {}
 
 
