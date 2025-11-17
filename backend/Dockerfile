@@ -35,6 +35,7 @@ COPY lag_llama /app/lag_llama
 # Codice applicazione
 COPY app /app/app
 COPY FoundationModel /app/FoundationModel
+COPY Modelli /app/Modelli
 
 
 EXPOSE 8000
