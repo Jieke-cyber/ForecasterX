@@ -1,9 +1,5 @@
-# In backend/app/tasks.py
+from .worker import celery_app
 
-# --- Import di Celery ---
-from .worker import celery_app  # La nostra app Celery da worker.py
-
-# --- Import dal tuo vecchio app/jobs.py e logica LagLlama ---
 import logging
 import os
 import io
@@ -12,22 +8,17 @@ import pandas as pd
 from sqlalchemy.orm import Session
 from .models import TrainingRun, ForecastPlot, Dataset, Model
 from .db import SessionLocal
-from .supa import supa  # Assicurati che l'import 'supa' sia corretto
 from autots import AutoTS
 
-# --- Import specifici per i tuoi task ---
-# Assicurati che questi percorsi siano corretti e importabili
 from .services import read_ts_for_training, _load_dataset_as_df
 from FoundationModel.lagllama import finetune_and_dump_ckpt
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, SUPABASE_BUCKET_PLOTS, supa
 
-# --- Setup di base ---
 logger = logging.getLogger(__name__)
 BUCKET_PLOTS = os.getenv("SUPABASE_BUCKET", "plots")
 SUPABASE_BUCKET_MODELS = os.getenv("SUPABASE_BUCKET", "models")
 
 
-# --- Funzione helper 'naive_forecast' (copiata dal tuo jobs.py) ---
 def naive_forecast(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
     last = float(df["value"].tail(1).iloc[0])
     last_date = df["ds"].tail(1).iloc[0]
@@ -41,8 +32,6 @@ def naive_forecast(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
     return pd.DataFrame({"ds": dates, "yhat": [last] * horizon})
 
 
-# --- Funzione helper '_run_training' (copiata dal tuo jobs.py) ---
-# Questa è la logica interna di AutoTS
 def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
     run = db.get(TrainingRun, run_id)
     if not run:
@@ -98,7 +87,7 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
             owner_email=owner_email
         ))
         run.status = "SUCCESS"
-        run.error = None  # Pulisce errori vecchi
+        run.error = None
         run.metrics_json = (run.metrics_json or {}) | metrics
         db.commit()
 
@@ -110,7 +99,6 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
         db.commit()
 
 
-# --- TASK CELERY 1 (AutoTS) ---
 @celery_app.task(name="run_autots_training")
 def run_autots_training_task(run_id: str, dataset_id: str, horizon: int):
     """Wrapper Task di Celery per AutoTS."""
@@ -131,7 +119,6 @@ def run_autots_training_task(run_id: str, dataset_id: str, horizon: int):
         db.close()
 
 
-# --- TASK CELERY 2 (Lag-Llama Finetune) ---
 @celery_app.task(name="run_lagllama_finetuning")
 def run_lagllama_finetuning_task(
         run_id: str,
@@ -150,11 +137,9 @@ def run_lagllama_finetuning_task(
         return
 
     try:
-        # 1. Imposta lo stato su RUNNING
         run.status = "RUNNING"
         db.commit()
 
-        # 2. Carica i dati
         df, _ = _load_dataset_as_df(db, dataset_id)
         if df is None or df.empty:
             raise ValueError("Dataset vuoto o non trovato")
@@ -168,7 +153,6 @@ def run_lagllama_finetuning_task(
             freq = None
         freq = freq or "D"
 
-        # 3. ESEGUI IL FINETUNING (Lavoro Pesante 1)
         logger.info(f"Inizio finetuning per job {run_id}...")
         ckpt_path = finetune_and_dump_ckpt(
             values=values,
@@ -183,7 +167,6 @@ def run_lagllama_finetuning_task(
         )
         logger.info(f"Finetuning per job {run_id} completato. Ckpt: {ckpt_path}")
 
-        # 4. UPLOAD SU SUPABASE (Lavoro Pesante 2)
         ffmodel_id = str(uuid.uuid4())
         object_key = f"models/{ffmodel_id}/weights.ckpt"
         with open(ckpt_path, "rb") as f:
@@ -196,7 +179,6 @@ def run_lagllama_finetuning_task(
         )
         logger.info(f"Upload ckpt per job {run_id} completato.")
 
-        # 5. Crea il record del nuovo Modello nel DB
         m = Model(
             id=ffmodel_id,
             name="Lag-Llama FT",
@@ -218,26 +200,23 @@ def run_lagllama_finetuning_task(
         )
         db.add(m)
 
-        # 6. Aggiorna il TrainingRun su SUCCESS
         run.status = "SUCCESS"
         run.error = None
         meta = (run.metrics_json or {})
         meta.update({
             "model": "Lag-Llama fine-tuned",
             "model_id_used": ffmodel_id,
-            **payload_dict  # Salva tutti i parametri usati
+            **payload_dict
         })
         run.metrics_json = meta
 
         db.commit()
 
     except Exception as e:
-        # 7. GESTIONE FALLIMENTO
         logger.error(f"❌ Fallimento catastrofico nel job lag-llama {run_id}: {e}")
         db.rollback()
         run.status = "FAILURE"
         run.error = str(e)
         db.commit()
     finally:
-        # 8. Chiudi sempre la sessione
         db.close()

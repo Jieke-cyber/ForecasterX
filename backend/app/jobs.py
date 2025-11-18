@@ -1,4 +1,3 @@
-# app/jobs.py
 import logging
 
 from FoundationModel.lagllama import predict_series
@@ -35,14 +34,12 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
     db.commit()
 
     try:
-        # 1) carica storico
         ds_row = db.get(Dataset, dataset_id)
         if not ds_row:
             raise ValueError("Dataset non trovato")
         owner_email = str(ds_row.owner_email).strip().lower()
-        df = read_ts_for_training(db, dataset_id)  # colonne: ds, value
+        df = read_ts_for_training(db, dataset_id)
 
-        # 2) calcola forecast
         try:
 
             model = AutoTS(forecast_length=horizon, frequency="infer", ensemble= None)
@@ -61,19 +58,15 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
             yhat = naive_forecast(df, horizon)
             metrics = {"note": "naive"}
 
-        # 3) combina storico + forecast in un unico CSV con colonna 'kind'
         hist = df[["ds", "value"]].copy().assign(kind="history")
         fut  = yhat.rename(columns={"yhat": "value"}).assign(kind="forecast")
         combined = pd.concat([hist, fut], ignore_index=True)
 
-        # 4) serializza CSV e carica su Storage
         csv_buf = io.StringIO()
-        combined.to_csv(csv_buf, index=False)  # colonne: ds,value,kind
-        csv_bytes = csv_buf.getvalue().encode("utf-8")
+        combined.to_csv(csv_buf, index=False)
 
         client = supa()
         plot_id = str(uuid.uuid4())
-          # percorso consigliato: plots/<owner>/<dataset>/<plot>.csv
         safe_owner = owner_email.replace("@", "_at_")
         object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
         client.storage.from_(BUCKET_PLOTS).upload(
@@ -81,10 +74,9 @@ def _run_training(db: Session, run_id: str, dataset_id: str, horizon: int):
             file = csv_bytes,
             file_options = {
                 "content-type": "text/csv",
-                "upsert": "true",  # opzionale ma comodo in dev
+                "upsert": "true",
             },
         )
-        # 5) registra su forecast_plots
         db.add(ForecastPlot(
             id=plot_id,
             training_run_id=run_id,
@@ -115,23 +107,19 @@ def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int,
         run.status = "RUNNING"
         db.commit()
 
-        # 1) carica storico
         ds_row = db.get(Dataset, dataset_id)
         if not ds_row:
             raise ValueError("Dataset non trovato")
         owner_email = str(ds_row.owner_email).strip().lower()
 
-        # usa il tuo loader "buono" se già lo hai:
         try:
-            from .services import read_ts_for_training  # se esiste nella tua codebase
-            df = read_ts_for_training(db, dataset_id)  # colonne: ds, value
+            from .services import read_ts_for_training
+            df = read_ts_for_training(db, dataset_id)
         except Exception:
-            # fallback locale se non hai il servizio:
             df = pd.read_csv(ds_row.path)
             df["ds"] = pd.to_datetime(df["ds"])
             df = df[["ds","value"]]
 
-        # 2) calcola forecast con Lag-Llama (foundation)
         s = pd.Series(df["value"].values, index=df["ds"])
         yhat = predict_series(s, horizon=horizon, context_len=context_len)
         yhat = pd.Series(yhat, index=pd.date_range(
@@ -141,17 +129,15 @@ def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int,
         yhat.columns = ["ds", "yhat"]
         metrics = {"note": "Lag-Llama foundation", "horizon": horizon, "context_len": context_len}
 
-        # 3) combina storico + forecast in unico CSV con colonna 'kind'
         hist = df[["ds", "value"]].copy().assign(kind="history")
         fut  = yhat.rename(columns={"yhat": "value"}).assign(kind="forecast")
         combined = pd.concat([hist, fut], ignore_index=True)
 
-        # 4) serializza CSV e carica su Storage
         csv_buf = io.StringIO()
-        combined.to_csv(csv_buf, index=False)  # colonne: ds,value,kind
+        combined.to_csv(csv_buf, index=False)
         csv_bytes = csv_buf.getvalue().encode("utf-8")
 
-        from .supa import supa, BUCKET_PLOTS  # usa i tuoi helper
+        from .supa import supa, BUCKET_PLOTS
         client = supa()
         plot_id = str(uuid.uuid4())
         safe_owner = owner_email.replace("@", "_at_")
@@ -163,7 +149,6 @@ def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int,
             file_options={"content-type": "text/csv", "upsert": "true"},
         )
 
-        # 5) registra su forecast_plots + aggiorna training_run
         db.add(ForecastPlot(
             id=plot_id,
             training_run_id=run_id,
@@ -172,11 +157,10 @@ def _run_lagllama_forecast(db_maker, run_id: str, dataset_id: str, horizon: int,
             owner_email=owner_email
         ))
 
-        # salva quale modello è stato usato (foundation)
         fm = db.query(Model).filter(Model.name=="Lag-Llama", Model.kind=="foundation").first()
         run.status = "SUCCESS"
         run.metrics_json = (run.metrics_json or {}) | metrics
-        if fm:  # se hai aggiunto la colonna model_id_used
+        if fm:
             setattr(run, "model_id_used", fm.id)
         db.commit()
 
@@ -206,14 +190,12 @@ def _run_lagllama_ft_forecast(db_maker, run_id: str, model_id: str, dataset_id: 
         if not ds_row: raise ValueError("Dataset non trovato")
         owner_email = str(ds_row.owner_email).strip().lower()
 
-        # carica df
         try:
             from .services import read_ts_for_training
             df = read_ts_for_training(db, dataset_id)
         except Exception:
             df = pd.read_csv(ds_row.path); df["ds"]=pd.to_datetime(df["ds"]); df=df[["ds","value"]]
 
-        # per ora usa foundation predictor (placeholder)
         s = pd.Series(df["value"].values, index=df["ds"])
         yhat = predict_series(s, horizon=horizon, context_len=context_len)
 
@@ -225,7 +207,6 @@ def _run_lagllama_ft_forecast(db_maker, run_id: str, model_id: str, dataset_id: 
         fut  = yhat.rename(columns={"yhat":"value"}).assign(kind="forecast")
         combined = pd.concat([hist, fut], ignore_index=True)
 
-        # upload + registrazione come sopra
         csv_buf = io.StringIO(); combined.to_csv(csv_buf, index=False)
         from .supa import supa, BUCKET_PLOTS
         client = supa()

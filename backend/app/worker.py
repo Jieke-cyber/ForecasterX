@@ -1,20 +1,18 @@
-# In backend/app/worker.py
 
+import os
 from celery import Celery
 
-# URL del tuo broker Redis (avviato con Docker)
-REDIS_URL = "redis://localhost:6379/0"
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# Crea l'istanza dell'app Celery
-# 'include' dice a Celery di cercare i task nel file 'app.tasks'
+
 celery_app = Celery(
     "worker",
     broker=REDIS_URL,
-    backend=REDIS_URL, # Usiamo Redis anche per i risultati
-    include=['app.tasks'] # Punta al file che creeremo al prossimo step
+    backend=REDIS_URL,
+    include=['app.tasks']
 )
 
-# Configurazioni opzionali
+
 celery_app.conf.update(
     task_serializer='json',
     accept_content=['json'],

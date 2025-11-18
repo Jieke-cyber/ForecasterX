@@ -1,24 +1,18 @@
-# app/models_runtime/pypots_runtime.py
 import os
 from pathlib import Path
 from typing import Dict, Any
-import logging
 import torch
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from pypots.forecasting import DLinear, TimesNet, FITS
 
-# 1. Ottieni la directory del file corrente (es. .../app/models_runtime)
 ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "Modelli"
 PYPOTS_MODELS: dict[str, dict] = {}
 
-# --- 4. AGGIUNGI QUESTO BLOCCO DI DEBUG ---
-# Usiamo print() con flush=True per essere sicuri di vederlo nei log di Render
 print("=" * 40, flush=True)
 print("--- [DEBUG RUNTIME] Inizio preload modelli PyPOTS ---", flush=True)
 print(f"--- [DEBUG RUNTIME] Percorso __file__: {__file__}", flush=True)
 
-# Testiamo diversi livelli di 'parents'
 try:
     p0 = Path(__file__).resolve().parent
     print(f"--- [DEBUG RUNTIME] parents[0] (dir file): {p0}", flush=True)
@@ -41,7 +35,6 @@ print(f"--- [DEBUG RUNTIME] ARTIFACT_DIR esiste? {ARTIFACT_DIR.exists()}", flush
 print("=" * 40, flush=True)
 
 
-# --- FINE BLOCCO DEBUG ---
 
 
 def load_artifact(path):
@@ -98,7 +91,7 @@ def preload_pypots_models() -> None:
 
         pattern = artifact.get("pattern", path.stem)
         model_type = artifact.get("model_type", "unknown")
-        key = f"{pattern}_{model_type}"   # es: pattern1_DLinear
+        key = f"{pattern}_{model_type}"
 
         PYPOTS_MODELS[key] = {
             "artifact": artifact,

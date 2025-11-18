@@ -20,7 +20,6 @@ class RecentPlot(BaseModel):
     created_at: str
 
 
-# --- Lag-Llama ---
 class ZeroShotPredictIn(BaseModel):
     dataset_id: str
     horizon: int = 48
@@ -29,7 +28,6 @@ class ZeroShotPredictIn(BaseModel):
 class FinetuneIn(BaseModel):
     dataset_id: str
     epochs: int = Field(ge=1, le=500, description="Numero di epoche di fine-tuning")
-    # opzionali “ragionevoli” con default buoni
     horizon: int = Field(60, ge=1, le=10000)
     context_len: int = Field(256, ge=1, le=100000)
     lr: float = Field(1e-4, gt=0)
