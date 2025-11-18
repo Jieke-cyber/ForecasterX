@@ -23,6 +23,7 @@ class TrainingRun(Base):
     error = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     model_id_used = Column(String, ForeignKey("models.id"), nullable=True)
+    celery_task_id = Column(String(255), nullable=True)
 
     dataset = relationship("Dataset", backref="runs")
 

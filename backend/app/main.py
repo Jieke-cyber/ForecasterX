@@ -6,6 +6,8 @@ import sys
 
 from dotenv import load_dotenv
 
+from .utils import upload_to_bucket
+
 ROOT = Path(__file__).resolve().parents[1]  # .../backend
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -27,14 +29,14 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 import uuid
+from .tasks import run_autots_training_task, run_lagllama_finetuning_task
 import os, re
 import io
 
 from .db import Base, engine, get_db, SessionLocal
 from .models import Dataset, TrainingRun, ForecastPlot, Model
 from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn
-from .services import save_csv, delete_csv, delete_single_plot, delete_training_run
-from .jobs import train_job, _run_lagllama_forecast
+from .services import save_csv, delete_csv, delete_single_plot, delete_training_run, _load_dataset_as_df
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
 
@@ -43,8 +45,7 @@ from .auth_utils import hash_password, verify_password, create_access_token
 
 from .auth_utils import SECRET_KEY, ALGORITHM
 from FoundationModel.lagllama import predict_series, predict_series_with_predictor, \
-    load_predictor_from_ckpt, finetune_and_dump_ckpt
-
+    load_predictor_from_ckpt
 
 from .models_runtime.pypots_runtime import (
     preload_pypots_models,
@@ -187,21 +188,6 @@ def get_current_user(
         raise HTTPException(401, "User not found", headers={"WWW-Authenticate": "Bearer"})
     return user
 
-def upload_to_bucket(key: str, data: bytes, bucket: str):
-    client = supa()
-    client.storage.from_(bucket).upload(
-        path=key,
-        file=data,
-        file_options={
-            "content-type": "text/csv",
-            "upsert": "true",   # 👈 deve essere STRINGA, non bool
-        },
-    )
-
-def download_from_bucket(key: str, bucket: str) -> bytes:
-    client = supa()
-    # supabase-py qui ti restituisce direttamente i bytes
-    return client.storage.from_(bucket).download(key)
 
 origins = [
     "http://localhost:5173",
@@ -250,38 +236,7 @@ class LoginBody(BaseModel):
 # ============================================================
 # 👇 NEW: helper riutilizzabili
 # ============================================================
-def _load_dataset_as_df(db: Session, dataset_id: str) -> tuple[pd.DataFrame, Dataset]:
-    dataset = (
-        db.query(Dataset)
-        .filter(Dataset.id == dataset_id)
-        .first()
-    )
-    if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
 
-    csv_bytes = download_from_bucket(dataset.path, bucket=SUPABASE_BUCKET)
-    df = pd.read_csv(io.BytesIO(csv_bytes))
-
-    # normalizza colonne → ds,value
-    rename_map = {}
-    for cand in ["ds", "date", "Date", "timestamp", "Timestamp"]:
-        if cand in df.columns:
-            rename_map[cand] = "ds"
-            break
-    for cand in ["value", "Value", "y"]:
-        if cand in df.columns:
-            rename_map[cand] = "value"
-            break
-
-    df = df.rename(columns=rename_map)
-
-    if "ds" not in df.columns or "value" not in df.columns:
-        raise HTTPException(400, "CSV must contain time and value columns")
-
-    df["ds"] = pd.to_datetime(df["ds"])
-    df = df.sort_values("ds").reset_index(drop=True)
-
-    return df, dataset
 
 
 def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str) -> Dataset:
@@ -439,21 +394,41 @@ def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), 
     return {"dataset_id": ds_id}
 
 
+# --- ENDPOINT 1: AutoTS Training ---
+#
 @app.post("/train")
-def start_train(req: TrainRequest, bg: BackgroundTasks, db: Session = Depends(get_db)):
+def start_train(
+    req: TrainRequest,
+    # Rimuovi 'bg: BackgroundTasks' dai parametri
+    db: Session = Depends(get_db)
+):
     ds = db.get(Dataset, req.dataset_id)
     if not ds:
         raise HTTPException(404, "Dataset non trovato")
 
     run_id = str(uuid.uuid4())
-    db.add(TrainingRun(id=run_id, dataset_id=req.dataset_id, status="PENDING"))
+    run = TrainingRun(
+        id=run_id,
+        dataset_id=req.dataset_id,
+        status="PENDING"
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run) # Per ottenere l'oggetto 'run'
+
+    # Sostituisci la chiamata a 'bg.add_task' con '.delay()'
+    task = run_autots_training_task.delay(
+        run_id=run.id,
+        dataset_id=req.dataset_id,
+        horizon=req.horizon
+    )
+
+    # Salva l'ID del task Celery nel DB
+    run.celery_task_id = task.id
     db.commit()
 
-    # ✅ il job creerà la sessione DB da sé (non passiamo db)
-    bg.add_task(train_job, run_id, req.dataset_id, req.horizon)
-
-    return {"job_id": run_id}
-
+    # Restituisci la risposta immediata al frontend
+    return {"job_id": run.id}
 
 @app.get("/jobs/{job_id}/status", response_model=JobStatus)
 def job_status(job_id: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
@@ -969,101 +944,46 @@ def lag_llama_predict_and_save(payload: ZeroShotPredictIn,
         raise HTTPException(status_code=500, detail=str(e))
 # ---------- FINETUNE: crea ZIP nello Storage + riga in models ----------
 @app.post("/lag-llama/{model_id}/finetune")
-def lag_llama_finetune(model_id: str ,payload: FinetuneIn, db: Session = Depends(get_db), current_user = Depends(get_current_user),):
-
+def lag_llama_finetune(
+    model_id: str,
+    payload: FinetuneIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     owner_email = str(current_user.email).strip().lower()
-    df, _ = _load_dataset_as_df(db, payload.dataset_id)
-    if df is None or df.empty:
+
+    # Validazione veloce: il dataset esiste?
+    ds = db.get(Dataset, payload.dataset_id)
+    if not ds:
         raise HTTPException(400, "Dataset vuoto o non trovato")
 
-    df = df.sort_values("ds")
-    values = df["value"].to_numpy(dtype=float)
-    start_ts = df["ds"].iloc[0]
-    try:
-        freq = pd.infer_freq(pd.to_datetime(df["ds"]).sort_values())
-    except Exception:
-        freq = None
-    freq = freq or "D"
-
+    # Crea il TrainingRun con stato PENDING
     run_id = str(uuid.uuid4())
-    db.add(TrainingRun(
+    run = TrainingRun(
         id=run_id,
         dataset_id=str(payload.dataset_id),
         status="PENDING",
-        metrics_json={},
-        error=None,
-        model_id_used=model_id,
-    ))
-    db.commit()
-    run = db.get(TrainingRun, run_id)
-
-    if not run:
-        run.status = "FAILURE"
-        db.commit()
-        return
-    run.status = "RUNNING"
-    db.commit()
-
-    # 1) FINE-TUNING → ckpt path locale
-    ckpt_path = finetune_and_dump_ckpt(
-        values=values,
-        start=start_ts,
-        freq=freq,
-        prediction_length=payload.horizon,
-        context_length=payload.context_len,
-        lr=payload.lr,
-        aug_prob=payload.aug_prob,
-        max_epochs=payload.epochs,
-        ckpt_base_dir=None,  # lascia che Lightning scelga/crei la dir
+        model_id_used=model_id, # Modello base usato per il tuning
     )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
 
-    # 2) Upload ckpt su Supabase
-    ffmodel_id = str(uuid.uuid4())
-    object_key = f"models/{ffmodel_id}/weights.ckpt"
-    with open(ckpt_path, "rb") as f:
-        blob = f.read()
-    supa().storage.from_(SUPABASE_BUCKET).upload(
-        path=object_key,
-        file=blob,
-        file_options={"content-type": "application/octet-stream", "upsert": "true"},
-    )
-
-    # 3) Inserisci riga in DB
-    m = Model(
-        id=ffmodel_id,
-        name="Lag-Llama FT",
-        kind="fine_tuned",
-        base_model="lag-llama",
-        storage_path=object_key,
-        params_json={
-            "dataset_id": payload.dataset_id,
-            "epochs": payload.epochs,
-            "horizon": payload.horizon,
-            "context_len": payload.context_len,
-            "freq": freq,
-            "lr": payload.lr,
-            "aug_prob": payload.aug_prob,
-        },
-        metrics_json={},
+    # Avvia il task Celery in background
+    task = run_lagllama_finetuning_task.delay(
+        run_id=run.id,
+        dataset_id=str(payload.dataset_id),
         owner_email=owner_email,
-        status="AVAILABLE",
+        base_model_id=model_id,
+        payload_dict=payload.dict() # Passa il payload come dizionario
     )
-    db.add(m)
+
+    # Salva l'ID del task Celery
+    run.celery_task_id = task.id
     db.commit()
 
-    run.status = "SUCCESS"
-    meta = (run.metrics_json or {})
-    meta.update({
-        "model": "Lag-Llama fine-tuned",
-        "horizon": payload.horizon,
-        "context_len": payload.context_len,
-        "freq": freq,
-        "model_id_used": ffmodel_id,
-    })
-    run.metrics_json = meta
-    db.commit()
-
-    return {"model_id": m.id, "storage_path": m.storage_path}
+    # Restituisci la risposta immediata
+    return {"job_id": run.id, "status": run.status}
 
 
 # ---------- PREDICT FT: preview ----------

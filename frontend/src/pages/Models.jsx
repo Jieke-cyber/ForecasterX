@@ -246,20 +246,50 @@ export default function Models() {
           setMsg(`Predizione Zero-shot completata. Righe: ${n}. Plot: ${plotId}`);
           return;
         }
-        if (a.actionKey === "ft-train") {
-          setMsg("Fine-tuning in esecuzione…");
-          const { data } = await llamaFinetune(id, {
-            dataset_id: datasetId,
-            epochs: Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5,
-          });
-          setStatus("SUCCESS");
-          setMsg(`Fine-tuning completato. Nuovo modello: ${data?.model_id || "?"}`);
-          try {
-            const { data: reload } = await listModels();
-            setModels(Array.isArray(reload) ? reload : []);
-          } catch {}
-          return;
-        }
+          if (a.actionKey === "ft-train") {
+              // 1. Messaggio di avvio (ora è corretto)
+              setMsg("Avvio del job di fine-tuning…");
+
+              // Prepara il payload completo che il nostro backend FastAPI si aspetta
+              const H = Number.isFinite(Number(horizon)) ? parseInt(horizon, 10) : 30;
+              const C = Number.isFinite(Number(context_len)) ? parseInt(context_len, 10) : 64;
+              const E = Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5;
+
+              const finetunePayload = {
+                  dataset_id: datasetId,
+                  horizon: H,
+                  context_len: C,
+                  epochs: E,
+                  // NOTA: Il nostro backend ora richiede anche questi.
+                  // Li impostiamo su un valore di default, ma dovresti
+                  // aggiungerli al tuo "DatasetPickerModal" in futuro!
+                  lr: 1e-4,
+                  aug_prob: 0.1,
+              };
+
+              // 2. Chiamiamo l'API. Ora risponderà subito.
+              const {data} = await llamaFinetune(id, finetunePayload);
+
+              // 3. Estraiamo il JOB_ID (non più il model_id)
+              // Il nostro backend ora restituisce {"job_id": "...", "status": "PENDING"}
+              const rid = data?.job_id;
+              if (!rid) {
+                  throw new Error("Risposta dall'API non valida: job_id mancante.");
+              }
+
+              // 4. Usiamo la TUA funzione di polling esistente!
+              setRunId(rid); // Mostra l'ID del job nel box
+              await pollRun(rid); // Aspetta che il job finisca (proprio come AutoTS)
+
+              // 5. Ricarica la lista dei modelli (solo dopo che il polling è finito)
+              try {
+                  const {data: reload} = await listModels();
+                  setModels(Array.isArray(reload) ? reload : []);
+              } catch {
+              }
+
+              return;
+          }
       }
 
       // 🔹 Fine-tuned Lag-Llama

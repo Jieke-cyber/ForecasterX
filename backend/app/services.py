@@ -7,6 +7,8 @@ from typing import Iterable
 import pandas as pd
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
+
+from .utils import download_from_bucket
 from .models import Dataset, ForecastPlot, TrainingRun
 from .supa import supa, SUPABASE_URL, SUPABASE_BUCKET  # <-- nuovo
 
@@ -202,3 +204,37 @@ def delete_training_run(db: Session, run_id: str, user_email: str) -> None:
 
     db.delete(run)
     db.commit()
+
+
+def _load_dataset_as_df(db: Session, dataset_id: str) -> tuple[pd.DataFrame, Dataset]:
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id)
+        .first()
+    )
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    csv_bytes = download_from_bucket(dataset.path, bucket=SUPABASE_BUCKET)
+    df = pd.read_csv(io.BytesIO(csv_bytes))
+
+    # normalizza colonne → ds,value
+    rename_map = {}
+    for cand in ["ds", "date", "Date", "timestamp", "Timestamp"]:
+        if cand in df.columns:
+            rename_map[cand] = "ds"
+            break
+    for cand in ["value", "Value", "y"]:
+        if cand in df.columns:
+            rename_map[cand] = "value"
+            break
+
+    df = df.rename(columns=rename_map)
+
+    if "ds" not in df.columns or "value" not in df.columns:
+        raise HTTPException(400, "CSV must contain time and value columns")
+
+    df["ds"] = pd.to_datetime(df["ds"])
+    df = df.sort_values("ds").reset_index(drop=True)
+
+    return df, dataset
