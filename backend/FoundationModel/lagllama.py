@@ -333,52 +333,69 @@ def _latest_ckpt_path(root: str) -> str | None:
 
 
 def finetune_and_dump_ckpt(
-    *,
-    values: np.ndarray,
-    start: str | pd.Timestamp,
-    freq: str,
-    prediction_length: int,
-    context_length: int,
-    foundation_ckpt_path: str | None = None,
-    lr: float = 5e-4,
-    aug_prob: float = 0.0,
-    max_epochs: int = 50,
-    ckpt_base_dir: str | None = None,
+        *,
+        df_long: pd.DataFrame,
+        freq: str,
+        prediction_length: int,
+        context_length: int,
+        foundation_ckpt_path: str | None = None,
+        lr: float = 5e-4,
+        aug_prob: float = 0.0,
+        max_epochs: int = 50,
+        ckpt_base_dir: str | None = None,
 ) -> str:
     """
-    Esegue FINE-TUNING e ritorna il path del checkpoint Lightning (.ckpt) completo.
+    Esegue FINE-TUNING MULTISERIE e ritorna il path del checkpoint Lightning (.ckpt).
     """
     import tempfile, glob, os, pathlib
     import pandas as pd
     import numpy as np
+    from gluonts.dataset.pandas import PandasDataset
 
-    arr = np.asarray(values, dtype=float).reshape(-1)
-    if not np.isfinite(arr).all():
+
+    df_long = df_long.rename(columns={'ds': 'timestamp', 'value': 'target', 'series_id': 'item_id'})
+
+    df_long['target'] = df_long['target'].astype(np.float32)
+
+    if not np.isfinite(df_long['target']).all():
         raise ValueError("La serie contiene NaN/inf.")
-    if arr.size < max(8, context_length):
-        raise ValueError(f"Serie troppo corta: {arr.size} < context_length={context_length}")
+
+    if 'item_id' not in df_long.columns:
+        raise ValueError("Il DataFrame combinato non contiene la colonna 'item_id'.")
+    if not np.isfinite(df_long['target']).all():
+        raise ValueError("La serie contiene NaN/inf.")
+    if df_long['target'].size < max(8, context_length):
+        raise ValueError(f"Serie troppo corta: {df_long['target'].size} < context_length={context_length}")
 
     if not freq or str(freq).strip() == "0":
         freq = "D"
 
-    n = len(arr)
-    split_idx = max(int(n * 0.8), 1)
 
-    start_ts = pd.Timestamp(start)
-    try:
-        offset = pd.tseries.frequencies.to_offset(freq)
-        valid_start = start_ts + (split_idx * offset)
-    except Exception:
-        valid_start = start_ts
+    df_long_sorted = df_long.sort_values(by='timestamp')
+    all_timestamps = df_long_sorted['timestamp'].unique()
 
-    train_ds = ListDataset(
-        [{"target": arr[:split_idx], "start": start_ts}],
-        freq=freq,
+    split_timestamp = all_timestamps[max(int(len(all_timestamps) * 0.8), 1)]
+
+    df_train_long = df_long_sorted[df_long_sorted['timestamp'] < split_timestamp]
+    df_valid_long = df_long_sorted[df_long_sorted['timestamp'] >= split_timestamp]
+
+    train_ds = PandasDataset.from_long_dataframe(
+        df_train_long,
+        item_id="item_id",
+        timestamp="timestamp",
+        target="target",
+        freq=str(freq),
     )
-    valid_ds = ListDataset(
-        [{"target": arr[split_idx:], "start": valid_start}],
-        freq=freq,
+    valid_ds = PandasDataset.from_long_dataframe(
+        df_valid_long,
+        item_id="item_id",
+        timestamp="timestamp",
+        target="target",
+        freq=str(freq),
     )
+
+    if not len(train_ds) or not len(valid_ds):
+        raise ValueError(f"Split fallito: train={len(train_ds)} valid={len(valid_ds)}. Controllare i dati.")
 
     rootdir = ckpt_base_dir or tempfile.mkdtemp(prefix="llama_ft_ckpt_")
 

@@ -1,5 +1,3 @@
-# app/main.py
-# --- add at top of app/main.py before other imports ---
 import logging
 from pathlib import Path
 import sys
@@ -8,10 +6,9 @@ from dotenv import load_dotenv
 
 from .utils import upload_to_bucket
 
-ROOT = Path(__file__).resolve().parents[1]  # .../backend
+ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-# ------------------------------------------------------
 
 import tempfile
 
@@ -37,7 +34,7 @@ from .db import Base, engine, get_db, SessionLocal
 from .models import Dataset, TrainingRun, ForecastPlot, Model
 from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn, TrainRequest
 from .services import save_csv, delete_csv, delete_single_plot, delete_training_run, _load_dataset_as_df
-from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
+from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa
 
 
 from .models import User
@@ -56,9 +53,6 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
-        # ----------------------------------------------------
-        # 1) Lag-Llama foundation: assicuro che esista nel DB
-        # ----------------------------------------------------
         fm = (
             db.query(Model)
             .filter(Model.name == "Lag-Llama", Model.kind == "foundation")
@@ -77,17 +71,10 @@ async def lifespan(app: FastAPI):
             )
             db.add(fm)
             db.commit()
-        # ----------------------------------------------------
-        # 2) Preload modelli PyPOTS (ricostruzione da .pt)
-        # ----------------------------------------------------
         preload_pypots_models()
 
-        # opzionale, ma comodo: esporre la cache anche in app.state
         app.state.pypots_models = PYPOTS_MODELS
 
-        # ----------------------------------------------------
-        # 3) Registrazione dei modelli PyPOTS nella tabella models
-        # ----------------------------------------------------
         for key, bundle in PYPOTS_MODELS.items():
             artifact = bundle["artifact"]
             pattern = artifact.get("pattern", key)
@@ -98,12 +85,10 @@ async def lifespan(app: FastAPI):
             metrics = artifact.get("metrics", {})
             init_kwargs = artifact.get("init_kwargs", {})
 
-            # nome nel DB: puoi usare key, oppure pattern, o qualcos'altro
-            name = key                   # es: "pattern1_DLinear"
-            kind = "pypots"              # tipo di modello (scelta tua)
-            base_model = model_type      # es: "DLinear"
+            name = key
+            kind = "pypots"
+            base_model = model_type
 
-            # quello che vuoi avere come json di parametri
             params_json = {
                 "pattern": pattern,
                 "model_type": model_type,
@@ -114,7 +99,6 @@ async def lifespan(app: FastAPI):
 
             metrics_json = metrics or {}
 
-            # cerco se esiste già una riga per questo modello
             db_model = (
                 db.query(Model)
                 .filter(Model.name == name, Model.kind == kind)
@@ -122,7 +106,6 @@ async def lifespan(app: FastAPI):
             )
 
             if not db_model:
-                # creazione nuovo record
                 db_model = Model(
                     name=name,
                     kind=kind,
@@ -130,13 +113,12 @@ async def lifespan(app: FastAPI):
                     storage_path=path,
                     params_json=params_json,
                     metrics_json=metrics_json,
-                    owner_email=None,      # o chi vuoi
+                    owner_email=None,
                     status="AVAILABLE",
                 )
                 db.add(db_model)
                 print(f"[Startup] Creato record models per '{name}'")
             else:
-                # update dati esistenti
                 db_model.base_model = base_model
                 db_model.storage_path = path
                 db_model.params_json = params_json
@@ -149,10 +131,8 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    # ---- qui l'app è pronta ----
     yield
 
-    # ---- SHUTDOWN ----
     PYPOTS_MODELS.clear()
     if hasattr(app.state, "pypots_models"):
         app.state.pypots_models.clear()
@@ -167,7 +147,6 @@ def get_current_user(
 ):
     token = credentials.credentials
     try:
-        # leeway (facoltativo) per tollerare piccoli sfasamenti di orologio
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except ExpiredSignatureError:
         raise HTTPException(
@@ -199,7 +178,6 @@ client_origin_url = os.getenv("CLIENT_ORIGIN")
 if client_origin_url:
     origins.append(client_origin_url)
 
-# CORS per sviluppo (React su 5173)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -211,13 +189,11 @@ app.add_middleware(
 Base.metadata.create_all(bind=engine)
 
 
-# 👇 NEW: schema per l’outliegetr detector
 class CleanOutliersBody(BaseModel):
     chunk: int = 100
     threshold: float = 0.000001
     new_name: str | None = None
 
-# 👇 NEW: schema per l’imputazione
 class ImputeBody(BaseModel):
     new_name: str | None = None
 
@@ -229,14 +205,9 @@ class LoginBody(BaseModel):
     email: EmailStr
     password: str
 
-# ============================================================
-# 👇 NEW: helper riutilizzabili
-# ============================================================
-
-
 
 def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str) -> Dataset:
-    new_id = str(uuid.uuid4()) # 👈 lo facciamo stringa noi
+    new_id = str(uuid.uuid4())
     new_ds = Dataset(
         id=new_id,
         name=name,
@@ -245,7 +216,6 @@ def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str)
     )
     db.add(new_ds)
     db.commit()
-    # 👇 NON facciamo db.refresh(new_ds) perché SQLAlchemy lo rileggerebbe come UUID
     return new_ds
 
 def _run_lagllama_ft_forecast_and_save(
@@ -258,15 +228,13 @@ def _run_lagllama_ft_forecast_and_save(
 ):
     db: Session = db_maker()
     try:
-        # mark RUNNING
+
         run = db.get(TrainingRun, run_id)
         if not run:
-            # run mancante: niente da fare
             return
         run.status = "RUNNING"
         db.commit()
 
-        # --- carica dataset (come nel tuo zero-shot) ---
         df, ds_row = _load_dataset_as_df(db, dataset_id)
         if df is None or df.empty:
             raise RuntimeError("Dataset vuoto o non trovato")
@@ -276,15 +244,12 @@ def _run_lagllama_ft_forecast_and_save(
         values = df["value"].to_numpy(dtype=float)
         start_ts = df["ds"].iloc[0]
 
-        # inferisci frequenza (riusa il tuo helper se presente)
         try:
-            # se hai _infer_freq(df["ds"]), puoi usare quello
             freq = pd.infer_freq(pd.to_datetime(df["ds"]).sort_values())
         except Exception:
             freq = None
         freq = freq or "D"
 
-        # --- scarica ckpt FT dallo storage ---
         m = db.query(Model).filter(Model.id == model_id).first()
         if not m or not m.storage_path:
             raise RuntimeError("Modello FT senza storage_path")
@@ -294,7 +259,6 @@ def _run_lagllama_ft_forecast_and_save(
         tmp_ckpt.write(blob); tmp_ckpt.flush(); tmp_ckpt.close()
         ckpt_local_path = tmp_ckpt.name
 
-        # --- costruisci predictor FT dal ckpt ---
         predictor = load_predictor_from_ckpt(
             weights_ckpt_path=ckpt_local_path,
             horizon=horizon,
@@ -302,7 +266,6 @@ def _run_lagllama_ft_forecast_and_save(
             freq=freq,
         )
 
-        # --- predizione ---
         yhat = predict_series_with_predictor(
             predictor,
             series=values,
@@ -311,8 +274,6 @@ def _run_lagllama_ft_forecast_and_save(
             start=start_ts,
         )
 
-        # --- costruisci future index & CSV combinato (history + forecast) ---
-        # offset dal freq (stesso pattern del tuo zero-shot)
         try:
             offset = pd.tseries.frequencies.to_offset(freq)
         except Exception:
@@ -325,12 +286,11 @@ def _run_lagllama_ft_forecast_and_save(
         hist = df.assign(kind="history")
         combined = pd.concat([hist, fut], ignore_index=True)
 
-        # --- upload CSV su Supabase Storage ---
         csv_bytes = combined.to_csv(index=False).encode("utf-8")
         client = supa()
         plot_id = str(uuid.uuid4())
         safe_owner = (owner_email or "public").replace("@", "_at_")
-        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"  # es. plots/<user>/<dataset>/<plot>.csv, se il bucket è quello dei plots
+        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
 
         client.storage.from_(SUPABASE_BUCKET).upload(
             path=object_key,
@@ -338,7 +298,6 @@ def _run_lagllama_ft_forecast_and_save(
             file_options={"content-type": "text/csv", "upsert": "true"},
         )
 
-        # --- registra ForecastPlot e finalizza run ---
         db.add(ForecastPlot(
             id=plot_id,
             training_run_id=run_id,
@@ -365,8 +324,6 @@ def _run_lagllama_ft_forecast_and_save(
             run.status = "FAILURE"
             run.error = str(e)
             db.commit()
-        # facoltativo: loggare l'eccezione
-        # print("FT predict/save error:", e)
         raise
     finally:
         db.close()
@@ -386,34 +343,27 @@ def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), 
     existing = db.query(Dataset).filter(Dataset.name == file.filename).first()
     if existing:
         raise HTTPException(status_code=400, detail="File name already exists, please rename your file before uploading.")
-    ds_id = save_csv(db, file, owner_email=owner_email)  # <-- passa l’owner
+    ds_id = save_csv(db, file, owner_email=owner_email)
     return {"dataset_id": ds_id}
 
 
-# --- ENDPOINT 1: AutoTS Training ---
-#
 @app.post("/train")
 def start_train(
         req: TrainRequest,
         db: Session = Depends(get_db)
 ):
-    # 1. Validazione iniziale
     if not req.dataset_ids:
         raise HTTPException(400, "Richiesto almeno un dataset ID")
 
-    # Usiamo il primo ID per l'oggetto TrainingRun, o un ID fornito (per tracciare la run)
     main_ds_id = req.main_dataset_id if req.main_dataset_id else req.dataset_ids[0]
 
-    # Controlliamo che tutti i dataset esistano (non indispensabile ma raccomandato)
     for ds_id in req.dataset_ids:
         if not db.get(Dataset, ds_id):
             raise HTTPException(404, f"Dataset {ds_id} non trovato")
 
-    # 2. Creazione della run
     run_id = str(uuid.uuid4())
     run = TrainingRun(
         id=run_id,
-        # Salva solo l'ID principale per tracciamento
         dataset_id=main_ds_id,
         status="PENDING"
     )
@@ -421,10 +371,8 @@ def start_train(
     db.commit()
     db.refresh(run)
 
-    # 3. Invio a Celery (passando la lista)
     task = run_autots_training_task.delay(
         run_id=run.id,
-        # 👈 PASSAGGIO CHIAVE: LISTA DI ID
         dataset_ids=req.dataset_ids,
         horizon=req.horizon
     )
@@ -441,7 +389,7 @@ def job_status(job_id: str, db: Session = Depends(get_db), current_user = Depend
         raise HTTPException(404, "Job non trovato")
     ds = db.get(Dataset, run.dataset_id)
     owner_email = str(current_user.email).strip().lower()
-    if ds.owner_email != owner_email:  # 👈 NEW
+    if ds.owner_email != owner_email:
         raise HTTPException(403, "Forbidden")
 
     result = None
@@ -477,7 +425,7 @@ def list_datasets(
     owner_email = str(current_user.email).strip().lower()
     rows = (
         db.query(Dataset)
-        .filter(Dataset.owner_email == owner_email)  # << filtro per utente
+        .filter(Dataset.owner_email == owner_email)
         .order_by(Dataset.created_at.desc())
         .all()
     )
@@ -502,18 +450,15 @@ def get_dataset_data(dataset_id: str, db: Session = Depends(get_db)):
 
     client = supa()
     try:
-        # scarico il file dallo storage
         file_bytes = client.storage.from_(os.getenv("SUPABASE_BUCKET")).download(ds.path)
     except Exception as e:
         raise HTTPException(500, f"Errore download CSV da storage: {e}")
 
-    # trasformo in DataFrame
     try:
         df = pd.read_csv(io.BytesIO(file_bytes))
     except Exception as e:
         raise HTTPException(400, f"CSV non leggibile: {e}")
 
-    # normalizza a ds,value
     if {"ds", "value"}.issubset(df.columns):
         df = df[["ds", "value"]].copy()
     else:
@@ -525,7 +470,6 @@ def get_dataset_data(dataset_id: str, db: Session = Depends(get_db)):
     df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
     df = df.dropna(subset=["ds"]).sort_values("ds")
 
-    # restituisco in forma comoda per il grafico
     return [
         {"ds": row.ds.isoformat(), "value": float(row.value)}
         for _, row in df.iterrows()
@@ -544,7 +488,7 @@ def get_plot_data(plot_id: str, db: Session = Depends(get_db), current_user = De
         raise HTTPException(404, "Plot non trovato")
 
     owner_email = str(current_user.email).strip().lower()
-    if plot.owner_email != owner_email:  # 👈 NEW
+    if plot.owner_email != owner_email:
         raise HTTPException(403, "Forbidden")
 
     client = supa()
@@ -558,14 +502,12 @@ def get_plot_data(plot_id: str, db: Session = Depends(get_db), current_user = De
     except Exception as e:
         raise HTTPException(400, f"CSV forecast non leggibile: {e}")
 
-    # ci aspettiamo ds,value,kind
     if "ds" not in df.columns or "value" not in df.columns:
         raise HTTPException(400, "CSV forecast non ha le colonne attese")
 
     df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
     df = df.dropna(subset=["ds"]).sort_values("ds")
 
-    # se manca kind, lo aggiungo di default a "history"
     if "kind" not in df.columns:
         df["kind"] = "history"
 
@@ -604,7 +546,6 @@ def list_plots(
 
     result = []
     for r in rows:
-        # se il bucket è pubblico e hai SUPABASE_URL possiamo costruire la URL
         public_url = (
             f"{base_url}/storage/v1/object/public/{bucket}/{r.path}"
             if base_url
@@ -630,14 +571,12 @@ def clean_outliers_on_dataset(
     current_user = Depends(get_current_user),
 ):
     email = str(current_user.email).strip().lower()
-    # 1. l’utente ha scelto il dataset
     df, dataset = _load_dataset_as_df(db, dataset_id)
 
     n = len(df)
     y = df["value"].astype(float).to_numpy()
     outlier_mask_all = np.zeros(n, dtype=bool)
 
-    # 2. scan a blocchi
     for start in range(0, n, body.chunk):
         end = min(start + body.chunk, n)
         seg = y[start:end].reshape(-1, 1)
@@ -650,18 +589,15 @@ def clean_outliers_on_dataset(
         mask_seg = scores_seg < body.threshold
         outlier_mask_all[start:end] = mask_seg
 
-    # 3. metto NaN solo dove c’è outlier
     df.loc[outlier_mask_all, "value"] = np.nan
 
-    # 4. salvo nuovo CSV NEL TUO BUCKET
     cleaned_key = f"{dataset.id}_cleaned.csv"
     buf = io.StringIO()
     df.to_csv(buf, index=False)
     upload_to_bucket(cleaned_key, buf.getvalue().encode("utf-8"), bucket=SUPABASE_BUCKET)
 
-    # 5. nuova riga in datasets
     cleaned_name = body.new_name or f"{dataset.name} (cleaned)"
-    new_ds = _create_new_dataset_row(db, cleaned_name, cleaned_key, owner_email=email)  # ⬅️ PASSA L'OWNER
+    new_ds = _create_new_dataset_row(db, cleaned_name, cleaned_key, owner_email=email)
 
     return {
         "original_dataset_id": str(dataset.id),
@@ -679,22 +615,18 @@ def impute_dataset_with_lerp(
     current_user = Depends(get_current_user),
 ):
     email = str(current_user.email).strip().lower()
-    # 1. l’utente sceglie il dataset
     df, dataset = _load_dataset_as_df(db, dataset_id)
 
-    # 2. preparo i dati in 3D per PyPots
     values = df["value"].to_numpy(dtype=float)
-    X = values.reshape(1, -1, 1)  # [1, n_steps, 1]
+    X = values.reshape(1, -1, 1)
     data_dict = {"X": X}
 
     imputer = Lerp()
     result = imputer.predict(data_dict)
     imputed = result["imputation"].reshape(-1)
 
-    # 3. metto i valori imputati nel df
     df["value"] = imputed
 
-    # 4. salvo nuovo CSV nel TUO bucket
     imputed_key = f"{dataset.id}_imputed.csv"
     buf = io.StringIO()
     df.to_csv(buf, index=False)
@@ -702,7 +634,7 @@ def impute_dataset_with_lerp(
 
     imputed_name = body.new_name if body and body.new_name else f"{dataset.name} (imputed)"
     new_ds = _create_new_dataset_row(
-        db, imputed_name, imputed_key, owner_email=email  # ⬅️ PASSA L'OWNER
+        db, imputed_name, imputed_key, owner_email=email
     )
 
     return {
@@ -712,7 +644,6 @@ def impute_dataset_with_lerp(
 
 @app.post("/auth/register")
 def register(body: RegisterBody, db: Session = Depends(get_db)):
-    # controlla se esiste già
     existing = db.query(User).filter(User.email == body.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -742,10 +673,10 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
 def delete_dataset(
     dataset_id: str,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user),  # ← come nel tuo upload
+    current_user = Depends(get_current_user),
 ):
     owner_email = str(current_user.email).strip().lower()
-    delete_csv(db, dataset_id, owner_email)  # la funzione service mostrata prima
+    delete_csv(db, dataset_id, owner_email)
     return
 
 def _split_bucket_path(path: str, default_bucket: str | None = None):
@@ -763,7 +694,6 @@ def _split_bucket_path(path: str, default_bucket: str | None = None):
 
 @app.get("/public/plots/forecast/{plot_id}/csv")
 def public_forecast_csv(plot_id: str, db=Depends(get_db)):
-    # 1) Leggi metadati dal DB
     row = db.execute(
         text("""
             SELECT id, name, path, owner_email
@@ -778,24 +708,20 @@ def public_forecast_csv(plot_id: str, db=Depends(get_db)):
 
     sb=supa()
 
-    # 2) Path reale del file su Supabase
-    file_path = row.path  # <-- IMPORTANTISSIMO
+    file_path = row.path
 
-    # 3) Scarica dal bucket
     try:
-        csv_bytes = sb.storage.from_(SUPABASE_BUCKET).download(file_path)  # <-- BYTES
+        csv_bytes = sb.storage.from_(SUPABASE_BUCKET).download(file_path)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"CSV non trovato nello storage: {e}")
 
     if not csv_bytes:
         raise HTTPException(status_code=404, detail="CSV vuoto o non trovato")
 
-        # 4) ritorna CSV
     return Response(content=csv_bytes, media_type="text/csv; charset=utf-8")
 
 @app.get("/public/datasets/{dataset_id}/csv")
 def public_dataset_csv(dataset_id: str, db=Depends(get_db)):
-    # 1) Leggi metadati dal DB
     row = db.execute(
         text("""
             SELECT id, name, path, owner_email
@@ -810,10 +736,8 @@ def public_dataset_csv(dataset_id: str, db=Depends(get_db)):
 
     sb = supa()
 
-    # 2) Path reale del file su Supabase
-    file_path = row.path   # assicurati che nella tabella `datasets` ci sia la colonna `path`
+    file_path = row.path
 
-    # 3) Scarica dal bucket
     try:
         csv_bytes = sb.storage.from_(SUPABASE_BUCKET).download(file_path)
     except Exception as e:
@@ -822,7 +746,6 @@ def public_dataset_csv(dataset_id: str, db=Depends(get_db)):
     if not csv_bytes:
         raise HTTPException(status_code=404, detail="CSV vuoto o non trovato")
 
-    # 4) Ritorna CSV
     return Response(content=csv_bytes, media_type="text/csv; charset=utf-8")
 @app.get("/train/{run_id}")
 def get_training_status(run_id: str, db: Session = Depends(get_db)):
@@ -839,7 +762,7 @@ def get_training_status(run_id: str, db: Session = Depends(get_db)):
 
     return {
         "run_id": run_id,
-        "status": tr.status,     # PENDING | RUNNING | SUCCESS | FAILURE
+        "status": tr.status,
         "error": tr.error,
         "plot_id": row["plot_id"] if row else None,
         "metrics": tr.metrics_json,
@@ -853,16 +776,14 @@ def list_jobs(
     owner_email = str(current_user.email).strip().lower()
     rows = (
         db.query(TrainingRun)
-        .join(Dataset, TrainingRun.dataset_id == Dataset.id)   # << join
-        .filter(Dataset.owner_email == owner_email)            # << ora funziona
+        .join(Dataset, TrainingRun.dataset_id == Dataset.id)
+        .filter(Dataset.owner_email == owner_email)
         .order_by(TrainingRun.created_at.desc())
         .all()
     )
 
     def metric_from(m: dict | None) -> str:
         m = m or {}
-        # con ensemble disattivo stai salvando best_model
-        # (se un domani aggiungi "model", prenderà quello)
         return m.get("model") or m.get("best_model") or "-"
 
     return [
@@ -890,7 +811,7 @@ def api_delete_training_run(run_id: str, db: Session = Depends(get_db), current_
 def _load_df(db: Session, dataset_id: str):
     ds = db.get(Dataset, dataset_id)
     if not ds: raise HTTPException(404, "Dataset non trovato")
-    df = pd.read_csv(ds.path)  # se usi storage remoto, scarica in temp
+    df = pd.read_csv(ds.path)
     df["ds"] = pd.to_datetime(df["ds"])
     return df[["ds","value"]], ds
 
@@ -899,16 +820,11 @@ def _infer_freq(ds_col: pd.Series) -> str:
     except Exception: return "D"
 
 
-# ---------- ZERO-SHOT: salvataggio CSV (history+forecast) ----------
 @app.post("/lag-llama/predict/save")
 def lag_llama_predict_and_save(payload: ZeroShotPredictIn,
                                db: Session = Depends(get_db)):
-    # --- MODIFICA ---
-    # Non creiamo più un TrainingRun (Job) e non usiamo BackgroundTasks.
-    # Eseguiamo la logica direttamente.
 
     try:
-        # Questa è la logica che prima era in _run_lagllama_forecast
 
         df, ds_row = _load_dataset_as_df(db, str(payload.dataset_id))
         owner_email = str(ds_row.owner_email).strip().lower()
@@ -931,22 +847,16 @@ def lag_llama_predict_and_save(payload: ZeroShotPredictIn,
             file_options={"content-type": "text/csv", "upsert": "true"}
         )
 
-        # Creiamo il plot, ma lo associamo a training_run_id=None
-        # Assicurati che la colonna `training_run_id` nella tabella `forecast_plots`
-        # accetti valori NULL.
         db.add(ForecastPlot(id=plot_id, training_run_id=None,
                             name=f"{ds_row.name} (Lag-Llama forecast)",
                             path=object_key, owner_email=owner_email))
         db.commit()
 
-        # Restituiamo direttamente il plot_id e il numero di righe
         return {"plot_id": plot_id, "rows": len(combined)}
 
     except Exception as e:
-        # Se qualcosa va storto, solleva un errore HTTP 500
         logging.error(f"Errore in lag_llama_predict_and_save: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-# ---------- FINETUNE: crea ZIP nello Storage + riga in models ----------
 @app.post("/lag-llama/{model_id}/finetune")
 def lag_llama_finetune(
     model_id: str,
@@ -956,41 +866,40 @@ def lag_llama_finetune(
 ):
     owner_email = str(current_user.email).strip().lower()
 
-    # Validazione veloce: il dataset esiste?
-    ds = db.get(Dataset, payload.dataset_id)
-    if not ds:
-        raise HTTPException(400, "Dataset vuoto o non trovato")
+    if not payload.dataset_ids:
+        raise HTTPException(400, "Richiesta almeno un ID per il fine-tuning.")
 
-    # Crea il TrainingRun con stato PENDING
+    for ds_id in payload.dataset_ids:
+        if not db.get(Dataset, ds_id):
+            raise HTTPException(400, f"Dataset {ds_id} non trovato.")
+
+    main_ds_id = payload.dataset_ids[0]
+
     run_id = str(uuid.uuid4())
     run = TrainingRun(
         id=run_id,
-        dataset_id=str(payload.dataset_id),
+        dataset_id=main_ds_id,
         status="PENDING",
-        model_id_used=model_id, # Modello base usato per il tuning
+        model_id_used=model_id,
     )
     db.add(run)
     db.commit()
     db.refresh(run)
 
-    # Avvia il task Celery in background
     task = run_lagllama_finetuning_task.delay(
         run_id=run.id,
-        dataset_id=str(payload.dataset_id),
+        dataset_ids=payload.dataset_ids,
         owner_email=owner_email,
         base_model_id=model_id,
-        payload_dict=payload.dict() # Passa il payload come dizionario
+        payload_dict=payload.dict()
     )
 
-    # Salva l'ID del task Celery
     run.celery_task_id = task.id
     db.commit()
 
-    # Restituisci la risposta immediata
     return {"job_id": run.id, "status": run.status}
 
 
-# ---------- PREDICT FT: preview ----------
 @app.post("/lag-llama-ft/{model_id}/predict/save")
 def lag_llama_ft_predict_and_save(
     model_id: str,
@@ -998,7 +907,6 @@ def lag_llama_ft_predict_and_save(
     background: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    # controlla che il modello FT esista
     m = db.query(Model).filter(Model.id == model_id).first()
     if not m:
         raise HTTPException(404, "Modello non trovato")
@@ -1026,7 +934,6 @@ def lag_llama_ft_predict_and_save(
         int(payload.context_len),
     )
     return {"run_id": run_id}
-# ---------- PREDICT FT: salvataggio CSV (history+forecast) ----------
 @app.get("/models")
 def list_models(
     db: Session = Depends(get_db),
@@ -1041,9 +948,9 @@ def list_models(
         .filter(
             or_(
                 Model.owner_email == owner_email,
-                Model.owner_email.is_(None),  # <— GLOBALI
+                Model.owner_email.is_(None),
             )
-        )  # << filtro per utente
+        )
         .order_by(Model.created_at.desc())
         .all()
     )
@@ -1078,7 +985,6 @@ def pypots_forecast_csv(
     per fare forecast su un CSV (Date,Value), salva il CSV su Supabase
     e crea un record in forecast_plots. Ritorna anche i dati in JSON.
     """
-    # 1) Recupero il record dal DB (modello PyPOTS)
     db_model = (
         db.query(Model)
         .filter(Model.id == model_id, Model.kind == "pypots")
@@ -1091,9 +997,8 @@ def pypots_forecast_csv(
             detail=f"Modello con id={model_id} non trovato o non è di tipo 'pypots'",
         )
 
-    model_key = str(db_model.name).strip()# es: "pattern1_DLinear"
+    model_key = str(db_model.name).strip()
 
-    # 2) Prendo il bundle modello+scaler dalla cache runtime
     try:
         bundle = get_pypots_model(model_key)
     except KeyError:
@@ -1107,7 +1012,6 @@ def pypots_forecast_csv(
     L = bundle["L"]
     H = min(bundle["H"], payload.horizon)
 
-    # 3) Leggo il CSV inviato
     df, ds_row = _load_dataset_as_df(db, payload.dataset_id)
     if df is None or df.empty:
         raise RuntimeError("Dataset vuoto o non trovato")
@@ -1126,16 +1030,13 @@ def pypots_forecast_csv(
             detail=f"Serie troppo corta: servono almeno L={L} punti, ne hai {len(df)}",
         )
 
-    # 4) Preparo la finestra come nel tuo script offline
     y = df["value"].astype("float32").values.reshape(-1, 1)
-    ys = scaler.transform(y)          # [T, 1]
-    x_last = ys[-L:, :][None, ...]    # [1, L, 1]
+    ys = scaler.transform(y)
+    x_last = ys[-L:, :][None, ...]
 
-    # 5) Previsione in scala normalizzata + inverse transform
     pred_scaled = predict_future(model, x_last, H)
     pred = scaler.inverse_transform(pred_scaled.reshape(-1, 1)).reshape(-1)
 
-    # 6) Costruisco history + future con colonna kind
     history_df = df[["ds", "value"]].copy()
     history_df["kind"] = "history"
 
@@ -1143,7 +1044,7 @@ def pypots_forecast_csv(
     future_dates = pd.date_range(
         start=last_date + pd.Timedelta(days=1),
         periods=H,
-        freq="D",   # se vuoi puoi inferire la freq reale
+        freq="D",
     )
     future_df = pd.DataFrame({
         "ds": future_dates,
@@ -1153,13 +1054,10 @@ def pypots_forecast_csv(
 
     combined_df = pd.concat([history_df, future_df], ignore_index=True)
 
-    # 7) Salva il CSV su Supabase (SENZA TrainingRun)
     csv_bytes = combined_df.to_csv(index=False).encode("utf-8")
     client = supa()
 
     plot_id = str(uuid.uuid4())
-    # se vuoi un path per-utente o per-dataset, puoi cambiare questa parte;
-    # qui usiamo solo model_id.
     object_key = f"pypots/{model_id}/{plot_id}.csv"
 
     client.storage.from_(SUPABASE_BUCKET).upload(
@@ -1168,8 +1066,6 @@ def pypots_forecast_csv(
         file_options={"content-type": "text/csv", "upsert": "true"},
     )
 
-    # 8) Crea il record in forecast_plots
-    # NB: training_run_id e owner_email li lasciamo None: i job NON sono usati per le previsioni.
     db.add(ForecastPlot(
         id=plot_id,
         training_run_id=None,
@@ -1179,7 +1075,6 @@ def pypots_forecast_csv(
     ))
     db.commit()
 
-    # 9) Ritorno JSON con info utili + dati
     return {
         "model_id": model_id,
         "model_key": model_key,

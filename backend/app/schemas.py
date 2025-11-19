@@ -23,7 +23,7 @@ class ZeroShotPredictIn(BaseModel):
     context_len: int = 512
 
 class FinetuneIn(BaseModel):
-    dataset_id: str
+    dataset_ids: List[str] = Field(...,min_length=1,)
     epochs: int = Field(ge=1, le=500, description="Numero di epoche di fine-tuning")
     horizon: int = Field(60, ge=1, le=10000)
     context_len: int = Field(256, ge=1, le=100000)
@@ -38,14 +38,10 @@ class PredictFTSaveIn(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    # Campo esistente per la lista di ID
     dataset_ids: List[str] = Field(..., min_length =1)
 
-    # Campo di tracciamento esistente
     main_dataset_id: str | None = None
 
-    # Campo esistente per l'orizzonte di previsione
     horizon: int = Field(ge=1, le=2000, default=24)
 
-    # 👈 CAMPO AGGIUNTO
     model_name: str | None = None
