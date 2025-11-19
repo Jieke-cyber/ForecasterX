@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, {useEffect, useMemo, useState} from "react";
 
 const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.25)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 };
 const card    = { background: "#fff", borderRadius: 12, padding: 16, width: 720, maxHeight: "80vh", overflow: "auto", boxShadow: "0 10px 30px rgba(0,0,0,.2)" };
@@ -45,6 +45,34 @@ export default function DatasetPickerModal({
   const [horizon, setHorizon] = useState(30);
   const [contextLen, setContextLen] = useState(64);
   const [epochs, setEpochs] = useState(5);
+  const [selectedIds, setSelectedIds] = useState([]);
+    // 🔑 NUOVO HOOK PER RESETTARE LO STATO
+  useEffect(() => {
+    // Se il modale è stato appena aperto, svuota la selezione precedente.
+    if (open) {
+      setSelectedIds([]);
+    }
+  }, [open]);
+  const isSingleSelection = useMemo(() => {
+      // Le azioni di previsione richiedono un singolo ID
+      return actionKey === "zz-save" || actionKey === "ft-save" || actionKey === "pyp-save";
+  }, [actionKey]);
+
+  // ❌ Rimuovi questa riga: const [selected, setSelected] = useState(null);
+
+  // 🔑 DEFINISCI LA FUNZIONE (DEVE ESSERE PRESENTE)
+  const toggleSelected = (id) => {
+      if (isSingleSelection) {
+          // Se è richiesta la selezione singola, imposta la lista all'elemento
+          // cliccato, o la svuota se si riclicca lo stesso elemento.
+          setSelectedIds(prev => prev.includes(id) ? [] : [id]);
+      } else {
+          // Comportamento standard da checkbox (aggiungi/rimuovi)
+          setSelectedIds(prev =>
+              prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+          );
+      }
+  };
 
   const show = useMemo(() => {
     if (actionKey === "ft-train") return { hor: false, ctx: false, ep: true };
@@ -65,15 +93,29 @@ export default function DatasetPickerModal({
   const pInt = (v, def) => (Number.isFinite(Number(v)) ? parseInt(v, 10) : def);
 
   const handleConfirm = () => {
-    if (!selected) return;
+    // ❌ VECCHIO: if (!selected) return;
+    if (selectedIds.length === 0) return; // ✅ NUOVO: Controlla se la lista è vuota
+
+    // ... (Logica per H, C, E) ...
+
     if (actionKey === "ft-train") {
-      onConfirm?.({ datasetId: selected, epochs: Math.max(1, pInt(epochs, 5)) });
+        // Passa la lista (e un ID singolo se il backend FT non è ancora aggiornato)
+        onConfirm?.({
+            datasetIds: selectedIds, // ✅ PASSAGGIO DELLA LISTA
+            epochs: Math.max(1, pInt(epochs, 5))
+        });
     } else {
-      const H = pInt(horizon, 30);
-      const C = Math.max(H, pInt(contextLen, 64)); // difesa
-      onConfirm?.({ datasetId: selected, horizon: H, context_len: C });
+        const H = pInt(horizon, 30);
+        const C = Math.max(H, pInt(contextLen, 64));
+
+        onConfirm?.({
+            datasetIds: selectedIds, // ✅ PASSAGGIO DELLA LISTA
+            horizon: H,
+            context_len: C
+        });
     }
-  };
+
+};
 
   return (
     <div style={overlay} onClick={onClose}>
@@ -100,15 +142,23 @@ export default function DatasetPickerModal({
                   </tr>
                 </thead>
                 <tbody>
-                  {datasets.map((d) => (
+                {datasets.map((d) => (
                     <tr key={d.id}>
-                      <td style={td} width="40">
-                        <input type="radio" name="ds" checked={selected === d.id} onChange={() => setSelected(d.id)} />
-                      </td>
-                      <td style={td}>{d.name ?? d.path ?? d.id}</td>
-                      <td style={td}>{fmt(d.created_at)}</td>
+                        <td style={td} width="40">
+                            {/* ❌ VECCHIO: type="radio" */}
+                            {/* ✅ NUOVO: type="checkbox" */}
+                            <input
+                                type="checkbox"
+                                name="ds"
+                                checked={selectedIds.includes(d.id)}
+                                // 🔑 USA la funzione per la selezione multipla
+                                onChange={() => toggleSelected(d.id)}
+                            />
+                        </td>
+                        <td style={td}>{d.name ?? d.path ?? d.id}</td>
+                        <td style={td}>{fmt(d.created_at)}</td>
                     </tr>
-                  ))}
+                ))}
                 </tbody>
               </table>
             </div>
@@ -116,9 +166,19 @@ export default function DatasetPickerModal({
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
               <button onClick={onClose}>Annulla</button>
               <button
-                onClick={handleConfirm}
-                disabled={!selected}
-                style={{ padding: "6px 12px", border: "1px solid #222", borderRadius: 8, background: "#fff", cursor: "pointer" }}
+                  onClick={handleConfirm}
+                  // ❌ VECCHIO: disabled={!selected}
+                  // ✅ NUOVO: Controlla se ci sono ID selezionati
+                  disabled={selectedIds.length === 0}
+                  style={{
+                      padding: "6px 12px",
+                      border: "1px solid #222",
+                      borderRadius: 8,
+                      background: "#fff",
+                      cursor: "pointer"
+                  }}
+              >
+                  {okText ?? "Conferma"}
               >
                 {okText ?? "Conferma"}
               </button>

@@ -1,9 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 
-class TrainRequest(BaseModel):
-    dataset_id: str
-    horizon: int = Field(ge=1, le=2000, default=24)
 
 class JobResult(BaseModel):
     metrics: Optional[Dict[str, Any]] = None
@@ -38,3 +35,17 @@ class PredictFTSaveIn(BaseModel):
     dataset_id: str
     horizon: int
     context_len: int
+
+
+class TrainRequest(BaseModel):
+    # Campo esistente per la lista di ID
+    dataset_ids: List[str] = Field(..., min_length =1)
+
+    # Campo di tracciamento esistente
+    main_dataset_id: str | None = None
+
+    # Campo esistente per l'orizzonte di previsione
+    horizon: int = Field(ge=1, le=2000, default=24)
+
+    # 👈 CAMPO AGGIUNTO
+    model_name: str | None = None

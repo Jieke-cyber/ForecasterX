@@ -196,150 +196,171 @@ export default function Models() {
     setMsg(`Job ${rid}: timeout in attesa del risultato.`);
   };
 
-  const onPickConfirm = async ({ datasetId, horizon, context_len, epochs }) => {
-    setPicking(false);
+    const onPickConfirm = async ({datasetIds, horizon, context_len, epochs, modelName}) => {
+        setPicking(false);
 
-    const H = Number.isFinite(Number(horizon)) ? parseInt(horizon, 10) : 30;
-    const C = Number.isFinite(Number(context_len)) ? parseInt(context_len, 10) : 64;
+        const H = Number.isFinite(Number(horizon)) ? parseInt(horizon, 10) : 30;
+        const C = Number.isFinite(Number(context_len)) ? parseInt(context_len, 10) : 64;
+        const E = Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5;
+        const M = modelName || null;
 
-    try {
-      setRunId(null);
-      setStatus("PENDING");
+        // 1. DETERMINAZIONE VARIABILI E AZIONI
+        const a = pendingAction;
+        const actionKey = a?.actionKey;
 
-      const a = pendingAction;
-      if (!a) {
-        setStatus("FAILURE");
-        setMsg("Azione non riconosciuta.");
-        return;
-      }
+        // 🔑 VARIABILE CHIAVE: ID SINGOLO (solo se la lista è lunga esattamente 1)
+        const datasetId = Array.isArray(datasetIds) && datasetIds.length === 1
+            ? datasetIds[0]
+            : null;
 
-      // 🔹 AUTO TS
-      if (a.modelKey === "autots" && a.actionKey === "auto-train") {
-        setMsg("Auto-addestramento e predizione in esecuzione…");
-        const { data } = await api.post("/train", {
-          dataset_id: datasetId,
-          horizon: H,
-        });
+        const isTrainingAction = actionKey === "auto-train" || actionKey === "ft-train";
+        const isPredictionAction = actionKey === "zz-save" || actionKey === "ft-save" || actionKey === "pyp-save";
 
-        const rid = data?.job_id;
-        if (!rid) throw new Error("Risposta senza job_id / run_id");
-        setRunId(rid);
-        await pollRun(rid);
-        return;
-      }
+        try {
+            setRunId(null);
+            setStatus("PENDING");
 
-      // 🔹 Foundation
-      if (a.modelKey.startsWith("fm:")) {
-        const id = a.modelId;
-        if (a.actionKey === "zz-save") {
-          setMsg("Zero-shot → salvataggio CSV…");
+            if (!a) {
+                setStatus("FAILURE");
+                setMsg("Azione non riconosciuta.");
+                return;
+            }
 
-          // --- MODIFICA ---
-          // Chiamiamo l'API, che ora risponde direttamente con il risultato
-          const { data } = await llamaZeroShotSave({ dataset_id: datasetId, horizon: H, context_len: C });
+            // 🛑 2. VALIDAZIONE (Guardrail)
 
-          // Gestiamo la risposta sincrona (come PyPOTS)
-          const n = data?.rows ? data.rows : "?";
-          const plotId = data?.plot_id ? data.plot_id : "?";
+            // Regola #1: Le previsioni richiedono ESATTAMENTE un dataset
+            if (isPredictionAction && datasetIds.length !== 1) {
+                setStatus("FAILURE");
+                setMsg(`Per la previsione devi selezionare ESATTAMENTE un dataset.`);
+                return;
+            }
 
-          setStatus("SUCCESS");
-          setMsg(`Predizione Zero-shot completata. Righe: ${n}. Plot: ${plotId}`);
-          return;
+            // Regola #2: Gli addestramenti richiedono ALMENO un dataset
+            if (isTrainingAction && datasetIds.length === 0) {
+                setStatus("FAILURE");
+                setMsg(`Per l'addestramento devi selezionare almeno un dataset.`);
+                return;
+            }
+
+            // 🔹 AUTO TS
+            if (a.modelKey === "autots" && isTrainingAction) {
+
+                setMsg(`Auto-addestramento multiserie su ${datasetIds.length} serie in esecuzione…`);
+
+                const {data} = await api.post("/train", {
+                    dataset_ids: datasetIds, // ✅ Usa la LISTA per il backend
+                    horizon: H,
+                    model_name: M,
+                });
+
+                const rid = data?.job_id;
+                if (!rid) throw new Error("Risposta senza job_id / run_id");
+                setRunId(rid);
+                await pollRun(rid);
+                return;
+            }
+
+            // 🔹 Foundation (FINE-TUNING)
+            if (a.modelKey.startsWith("fm:") && actionKey === "ft-train" && isTrainingAction) {
+                const id = a.modelId;
+                setMsg(`Avvio del job di fine-tuning su ${datasetIds.length} serie...`);
+
+                const finetunePayload = {
+                    dataset_ids: datasetIds, // ✅ Usa la LISTA per il backend
+                    horizon: H,
+                    context_len: C,
+                    epochs: E,
+                    lr: 1e-4,
+                    aug_prob: 0.1,
+                };
+
+                const {data} = await llamaFinetune(id, finetunePayload);
+
+                const rid = data?.job_id;
+                if (!rid) {
+                    throw new Error("Risposta dall'API non valida: job_id mancante.");
+                }
+
+                setRunId(rid);
+                await pollRun(rid);
+
+                try {
+                    const {data: reload} = await listModels();
+                    setModels(Array.isArray(reload) ? reload : []);
+                } catch {
+                }
+
+                return;
+            }
+
+            // 🔹 Foundation
+            if (a.modelKey.startsWith("fm:")) {
+                const id = a.modelId;
+                if (a.actionKey === "zz-save" && isPredictionAction) {
+                    setMsg("Zero-shot → salvataggio CSV…");
+                    const {data} = await llamaZeroShotSave({
+                        dataset_id: datasetId, // ✅ ID SINGOLO
+                        horizon: H, context_len: C
+                    });
+
+                    // Gestiamo la risposta sincrona (come PyPOTS)
+                    const n = data?.rows ? data.rows : "?";
+                    const plotId = data?.plot_id ? data.plot_id : "?";
+
+                    setStatus("SUCCESS");
+                    setMsg(`Predizione Zero-shot completata. Plot: ${data?.plot_id ? data.plot_id : '?'}`);
+                    return;
+                }
+
+            }
+
+            // 🔹 Fine-tuned Lag-Llama
+            if (a.modelKey.startsWith("ft:")) {
+                const id = a.modelId;
+                if (a.actionKey === "ft-save" && isPredictionAction) {
+                    setMsg("Predizione FT → salvataggio CSV…");
+                    const {data} = await llamaPredictFTSave(id, {
+                        dataset_id: datasetId, // ✅ ID SINGOLO
+                        horizon: H,
+                        context_len: C,
+                    });
+                    const rid = data?.run_id;
+                    if (!rid) throw new Error("Risposta senza run_id");
+                    setRunId(rid);
+                    await pollRun(rid);
+                    return;
+                }
+            }
+
+            // 🔹 PyPOTS (NUOVO RAMO)
+            // PyPOTS
+            if (a.modelKey.startsWith("pyp:")) {
+                const id = a.modelId;
+
+                if (a.actionKey === "pyp-save" && isPredictionAction) {
+                    setMsg("Predizione PyPOTS → salvataggio CSV…");
+                    const {data} = await pypotsPredictSave(id, {
+                        dataset_id: datasetId, // ✅ ID SINGOLO
+                        horizon: H,
+                    });
+
+                    const n = Array.isArray(data?.rows) ? data.rows.length : "?";
+                    setStatus("SUCCESS");
+                    setMsg(`Predizione PyPOTS completata. Righe restituite: ${Array.isArray(data?.rows) ? data.rows.length : '?'}`);
+                    return;
+                }
+            }
+
+
+            setStatus("FAILURE");
+            setMsg("Azione non riconosciuta.");
+        } catch (e) {
+            setStatus("FAILURE");
+            setMsg(asMsg(e, "Errore nell'azione richiesta"));
+        } finally {
+            setPendingAction(null);
         }
-          if (a.actionKey === "ft-train") {
-              // 1. Messaggio di avvio (ora è corretto)
-              setMsg("Avvio del job di fine-tuning…");
-
-              // Prepara il payload completo che il nostro backend FastAPI si aspetta
-              const H = Number.isFinite(Number(horizon)) ? parseInt(horizon, 10) : 30;
-              const C = Number.isFinite(Number(context_len)) ? parseInt(context_len, 10) : 64;
-              const E = Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5;
-
-              const finetunePayload = {
-                  dataset_id: datasetId,
-                  horizon: H,
-                  context_len: C,
-                  epochs: E,
-                  // NOTA: Il nostro backend ora richiede anche questi.
-                  // Li impostiamo su un valore di default, ma dovresti
-                  // aggiungerli al tuo "DatasetPickerModal" in futuro!
-                  lr: 1e-4,
-                  aug_prob: 0.1,
-              };
-
-              // 2. Chiamiamo l'API. Ora risponderà subito.
-              const {data} = await llamaFinetune(id, finetunePayload);
-
-              // 3. Estraiamo il JOB_ID (non più il model_id)
-              // Il nostro backend ora restituisce {"job_id": "...", "status": "PENDING"}
-              const rid = data?.job_id;
-              if (!rid) {
-                  throw new Error("Risposta dall'API non valida: job_id mancante.");
-              }
-
-              // 4. Usiamo la TUA funzione di polling esistente!
-              setRunId(rid); // Mostra l'ID del job nel box
-              await pollRun(rid); // Aspetta che il job finisca (proprio come AutoTS)
-
-              // 5. Ricarica la lista dei modelli (solo dopo che il polling è finito)
-              try {
-                  const {data: reload} = await listModels();
-                  setModels(Array.isArray(reload) ? reload : []);
-              } catch {
-              }
-
-              return;
-          }
-      }
-
-      // 🔹 Fine-tuned Lag-Llama
-      if (a.modelKey.startsWith("ft:")) {
-        const id = a.modelId;
-        if (a.actionKey === "ft-save") {
-          setMsg("Predizione FT → salvataggio CSV…");
-          const { data } = await llamaPredictFTSave(id, {
-            dataset_id: datasetId,
-            horizon: H,
-            context_len: C,
-          });
-          const rid = data?.run_id;
-          if (!rid) throw new Error("Risposta senza run_id");
-          setRunId(rid);
-          await pollRun(rid);
-          return;
-        }
-      }
-
-      // 🔹 PyPOTS (NUOVO RAMO)
-      // PyPOTS
-      if (a.modelKey.startsWith("pyp:")) {
-        const id = a.modelId;
-
-        if (a.actionKey === "pyp-save") {
-          setMsg("Predizione PyPOTS → salvataggio CSV…");
-
-          const { data } = await pypotsPredictSave(id, {
-            dataset_id: datasetId,
-            horizon: H,
-          });
-
-          const n = Array.isArray(data?.rows) ? data.rows.length : "?";
-          setStatus("SUCCESS");
-          setMsg(`Predizione PyPOTS completata. Righe restituite: ${n}`);
-          return;
-        }
-      }
-
-
-      setStatus("FAILURE");
-      setMsg("Azione non riconosciuta.");
-    } catch (e) {
-      setStatus("FAILURE");
-      setMsg(asMsg(e, "Errore nell'azione richiesta"));
-    } finally {
-      setPendingAction(null);
-    }
-  };
+    };
 
   return (
     <div style={wrap}>

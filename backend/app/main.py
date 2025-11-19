@@ -35,7 +35,7 @@ import io
 
 from .db import Base, engine, get_db, SessionLocal
 from .models import Dataset, TrainingRun, ForecastPlot, Model
-from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn
+from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn, TrainRequest
 from .services import save_csv, delete_csv, delete_single_plot, delete_training_run, _load_dataset_as_df
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa  # per costruire URL se bucket è pubblico
 
@@ -210,10 +210,6 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=engine)
 
-class TrainRequest(BaseModel):
-    dataset_id: str
-    horizon: int | None = None
-    model_name: str | None = None
 
 # 👇 NEW: schema per l’outliegetr detector
 class CleanOutliersBody(BaseModel):
@@ -398,36 +394,44 @@ def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), 
 #
 @app.post("/train")
 def start_train(
-    req: TrainRequest,
-    # Rimuovi 'bg: BackgroundTasks' dai parametri
-    db: Session = Depends(get_db)
+        req: TrainRequest,
+        db: Session = Depends(get_db)
 ):
-    ds = db.get(Dataset, req.dataset_id)
-    if not ds:
-        raise HTTPException(404, "Dataset non trovato")
+    # 1. Validazione iniziale
+    if not req.dataset_ids:
+        raise HTTPException(400, "Richiesto almeno un dataset ID")
 
+    # Usiamo il primo ID per l'oggetto TrainingRun, o un ID fornito (per tracciare la run)
+    main_ds_id = req.main_dataset_id if req.main_dataset_id else req.dataset_ids[0]
+
+    # Controlliamo che tutti i dataset esistano (non indispensabile ma raccomandato)
+    for ds_id in req.dataset_ids:
+        if not db.get(Dataset, ds_id):
+            raise HTTPException(404, f"Dataset {ds_id} non trovato")
+
+    # 2. Creazione della run
     run_id = str(uuid.uuid4())
     run = TrainingRun(
         id=run_id,
-        dataset_id=req.dataset_id,
+        # Salva solo l'ID principale per tracciamento
+        dataset_id=main_ds_id,
         status="PENDING"
     )
     db.add(run)
     db.commit()
-    db.refresh(run) # Per ottenere l'oggetto 'run'
+    db.refresh(run)
 
-    # Sostituisci la chiamata a 'bg.add_task' con '.delay()'
+    # 3. Invio a Celery (passando la lista)
     task = run_autots_training_task.delay(
         run_id=run.id,
-        dataset_id=req.dataset_id,
+        # 👈 PASSAGGIO CHIAVE: LISTA DI ID
+        dataset_ids=req.dataset_ids,
         horizon=req.horizon
     )
 
-    # Salva l'ID del task Celery nel DB
     run.celery_task_id = task.id
     db.commit()
 
-    # Restituisci la risposta immediata al frontend
     return {"job_id": run.id}
 
 @app.get("/jobs/{job_id}/status", response_model=JobStatus)
