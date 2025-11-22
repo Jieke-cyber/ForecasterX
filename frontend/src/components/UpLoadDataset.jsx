@@ -17,7 +17,6 @@ export default function UpLoadDataset({ onDone, onCancel }) {
 
 
     const form = new FormData();
-    // ⚠️ il nome "file" deve coincidere con il parametro FastAPI: file: UploadFile = File(...)
     form.append("file", file);
 
     setLoading(true);
@@ -26,7 +25,7 @@ export default function UpLoadDataset({ onDone, onCancel }) {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setMsg("Caricato con successo.");
-      onDone?.();       // ricarica la lista in dashboard
+      onDone?.();
     } catch (e) {
       setMsg(e?.response?.data?.detail ?? "Upload fallito");
     } finally {

@@ -39,10 +39,8 @@ export default function Register() {
 
     setLoading(true);
     try {
-      // BACKEND: JSON { email, password }
       const res = await api.post("/auth/register", { email: emailNorm, password });
 
-      // Auto-login se /auth/register ritorna un token
       const tk =
         res.data?.access_token ??
         res.data?.token ??
@@ -53,7 +51,7 @@ export default function Register() {
         return;
       }
 
-      setOk(true); // altrimenti mostra conferma e vai al login
+      setOk(true);
     } catch (e) {
       setErr(extractErrorMessage(e));
     } finally {

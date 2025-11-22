@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, Any, Dict, List
 
 
@@ -45,3 +45,23 @@ class TrainRequest(BaseModel):
     horizon: int = Field(ge=1, le=2000, default=24)
 
     model_name: str | None = None
+
+
+class CleanOutliersBody(BaseModel):
+    chunk: int = 100
+    threshold: float = 0.000001
+    new_name: str | None = None
+
+
+class ImputeBody(BaseModel):
+    new_name: str | None = None
+
+
+class RegisterBody(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class LoginBody(BaseModel):
+    email: EmailStr
+    password: str

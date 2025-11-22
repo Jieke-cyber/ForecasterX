@@ -1,49 +1,38 @@
 import logging
 from pathlib import Path
 import sys
-
 from dotenv import load_dotenv
+from jose import jwt, ExpiredSignatureError, JWTError, JOSEError
 
 from .utils import upload_to_bucket
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-import tempfile
-
 from contextlib import asynccontextmanager
-
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, status, Response
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, status, Response, Security, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Security, HTTPException, Depends
+from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt, ExpiredSignatureError, JOSEError
 from starlette.responses import RedirectResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 import uuid
 from .tasks import run_autots_training_task, run_lagllama_finetuning_task
 import os, re
 import io
-
 from .db import Base, engine, get_db, SessionLocal
-from .models import Dataset, TrainingRun, ForecastPlot, Model
-from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn, TrainRequest
-from .services import save_csv, delete_csv, delete_single_plot, delete_training_run, _load_dataset_as_df
+from .models import Dataset, TrainingRun, ForecastPlot, Model, User
+from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn, TrainRequest, CleanOutliersBody, \
+    ImputeBody, RegisterBody, LoginBody
+from .services import save_csv, delete_csv, delete_single_plot, delete_training_run, _load_dataset_as_df, \
+    _run_lagllama_ft_forecast_and_save, _create_new_dataset_row
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa
-
-
 from .models import User
-from .auth_utils import hash_password, verify_password, create_access_token
-
-from .auth_utils import SECRET_KEY, ALGORITHM
-from FoundationModel.lagllama import predict_series, predict_series_with_predictor, \
-    load_predictor_from_ckpt
-
+from .auth_utils import hash_password, verify_password, create_access_token, SECRET_KEY, ALGORITHM
+from FoundationModel.lagllama import predict_series
 from .models_runtime.pypots_runtime import (
     preload_pypots_models,
     PYPOTS_MODELS, get_pypots_model, predict_future,
@@ -141,6 +130,35 @@ app = FastAPI(title="TS WebApp Backend (MVP)", lifespan=lifespan)
 
 security = HTTPBearer()
 
+origins = [
+    "http://localhost:5173",
+    "http://localhost:8080"
+]
+
+client_origin_url = os.getenv("CLIENT_ORIGIN")
+
+if client_origin_url:
+    origins.append(client_origin_url)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+Base.metadata.create_all(bind=engine)
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/docs")
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Security(security),
     db: Session = Depends(get_db),
@@ -168,177 +186,9 @@ def get_current_user(
     return user
 
 
-origins = [
-    "http://localhost:5173",
-    "http://localhost:8080"
-]
-
-client_origin_url = os.getenv("CLIENT_ORIGIN")
-
-if client_origin_url:
-    origins.append(client_origin_url)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-Base.metadata.create_all(bind=engine)
-
-
-class CleanOutliersBody(BaseModel):
-    chunk: int = 100
-    threshold: float = 0.000001
-    new_name: str | None = None
-
-class ImputeBody(BaseModel):
-    new_name: str | None = None
-
-class RegisterBody(BaseModel):
-    email: EmailStr
-    password: str
-
-class LoginBody(BaseModel):
-    email: EmailStr
-    password: str
-
-
-def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str) -> Dataset:
-    new_id = str(uuid.uuid4())
-    new_ds = Dataset(
-        id=new_id,
-        name=name,
-        path=path,
-        owner_email=owner_email,
-    )
-    db.add(new_ds)
-    db.commit()
-    return new_ds
-
-def _run_lagllama_ft_forecast_and_save(
-    db_maker,
-    run_id: str,
-    model_id: str,
-    dataset_id: str,
-    horizon: int,
-    context_len: int,
-):
-    db: Session = db_maker()
-    try:
-
-        run = db.get(TrainingRun, run_id)
-        if not run:
-            return
-        run.status = "RUNNING"
-        db.commit()
-
-        df, ds_row = _load_dataset_as_df(db, dataset_id)
-        if df is None or df.empty:
-            raise RuntimeError("Dataset vuoto o non trovato")
-
-        df = df.sort_values("ds")
-        owner_email = (str(ds_row.owner_email) if ds_row and ds_row.owner_email else "").strip().lower()
-        values = df["value"].to_numpy(dtype=float)
-        start_ts = df["ds"].iloc[0]
-
-        try:
-            freq = pd.infer_freq(pd.to_datetime(df["ds"]).sort_values())
-        except Exception:
-            freq = None
-        freq = freq or "D"
-
-        m = db.query(Model).filter(Model.id == model_id).first()
-        if not m or not m.storage_path:
-            raise RuntimeError("Modello FT senza storage_path")
-
-        blob: bytes = supa().storage.from_(SUPABASE_BUCKET).download(m.storage_path)
-        tmp_ckpt = tempfile.NamedTemporaryFile(delete=False, suffix=".ckpt")
-        tmp_ckpt.write(blob); tmp_ckpt.flush(); tmp_ckpt.close()
-        ckpt_local_path = tmp_ckpt.name
-
-        predictor = load_predictor_from_ckpt(
-            weights_ckpt_path=ckpt_local_path,
-            horizon=horizon,
-            context_len=context_len,
-            freq=freq,
-        )
-
-        yhat = predict_series_with_predictor(
-            predictor,
-            series=values,
-            horizon=horizon,
-            freq=freq,
-            start=start_ts,
-        )
-
-        try:
-            offset = pd.tseries.frequencies.to_offset(freq)
-        except Exception:
-            offset = pd.tseries.frequencies.to_offset("D")
-
-        last_ts = df["ds"].max()
-        future_index = pd.date_range(last_ts + offset, periods=horizon, freq=freq)
-
-        fut = pd.DataFrame({"ds": future_index, "value": yhat[:horizon], "kind": "forecast"})
-        hist = df.assign(kind="history")
-        combined = pd.concat([hist, fut], ignore_index=True)
-
-        csv_bytes = combined.to_csv(index=False).encode("utf-8")
-        client = supa()
-        plot_id = str(uuid.uuid4())
-        safe_owner = (owner_email or "public").replace("@", "_at_")
-        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
-
-        client.storage.from_(SUPABASE_BUCKET).upload(
-            path=object_key,
-            file=csv_bytes,
-            file_options={"content-type": "text/csv", "upsert": "true"},
-        )
-
-        db.add(ForecastPlot(
-            id=plot_id,
-            training_run_id=run_id,
-            name=f"{getattr(ds_row, 'name', dataset_id)} (Lag-Llama FT forecast)",
-            path=object_key,
-            owner_email=owner_email,
-        ))
-
-        run.status = "SUCCESS"
-        meta = (run.metrics_json or {})
-        meta.update({
-            "note": "Lag-Llama fine-tuned",
-            "horizon": horizon,
-            "context_len": context_len,
-            "freq": freq,
-            "model_id_used": model_id,
-        })
-        run.metrics_json = meta
-        db.commit()
-
-    except Exception as e:
-        run = db.get(TrainingRun, run_id)
-        if run:
-            run.status = "FAILURE"
-            run.error = str(e)
-            db.commit()
-        raise
-    finally:
-        db.close()
-
-
-@app.get("/")
-def root():
-    return RedirectResponse(url="/docs")
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-
 @app.post("/datasets/upload")
-def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(get_current_user),):
+def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db), current_user = Depends(
+    get_current_user), ):
     owner_email = str(current_user.email).strip().lower()
     existing = db.query(Dataset).filter(Dataset.name == file.filename).first()
     if existing:

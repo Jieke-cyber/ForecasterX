@@ -16,13 +16,10 @@ export default api;
 
 export const listModels = () => api.get("/models");
 
-// Foundation
 export const llamaZeroShotSave = (body) => api.post("/lag-llama/predict/save", body);
 export const llamaFinetune     = (id ,body) => api.post(`/lag-llama/${id}/finetune`, body);
 
-// Fine-tuned
 export const llamaPredictFTSave = (id, body) => api.post(`/lag-llama-ft/${id}/predict/save`, body);
 
-// src/lib/api.js
 export const pypotsPredictSave = (modelId, payload) =>
   api.post(`/pypots/${modelId}/forecast-csv`, payload);

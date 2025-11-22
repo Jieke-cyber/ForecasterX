@@ -37,7 +37,7 @@ const onUpdate = async (id) => {
   if (!id) return setMsg("ID mancante.");
   setMsg(null);
   try {
-    await api.get(`/jobs/${id}/status`); // o /impute
+    await api.get(`/jobs/${id}/status`);
     setMsg("Stato aggiornato");
     load();
   } catch (e) {
@@ -49,7 +49,7 @@ const onDelete = async (id) => {
   if (!id) return setMsg("ID mancante.");
   setMsg(null);
   try {
-    await api.post(`/train/${id}/delete`); // o /impute
+    await api.post(`/train/${id}/delete`);
     setMsg("Eliminazione completata");
     load();
   } catch (e) {

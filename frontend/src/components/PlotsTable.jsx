@@ -1,4 +1,3 @@
-// src/components/PlotsTable.jsx
 import React from "react";
 
 const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #eee", fontWeight: 600 };

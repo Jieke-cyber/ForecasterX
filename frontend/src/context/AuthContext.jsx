@@ -17,10 +17,8 @@ export function AuthProvider({ children }) {
     navigate("/login", { replace: true });
   };
 
-  // chiamala SOLO quando hai un token valido dalla /auth/login
   const loginWithToken = (tk) => {
     if (!tk || typeof tk !== "string") {
-      // niente token → niente navigate, niente crash
       return;
     }
     try { localStorage.setItem("token", tk); } catch {}
@@ -29,13 +27,11 @@ export function AuthProvider({ children }) {
       const payload = jwtDecode(tk);
       setUser({ email: payload?.email });
     } catch {
-      // token non decodificabile: non crashare
       setUser(null);
     }
     navigate("/", { replace: true });
   };
 
-  // logout automatico alla scadenza (best-effort, senza crash)
   useEffect(() => {
     if (!token) return;
     try {
@@ -46,12 +42,10 @@ export function AuthProvider({ children }) {
       const t = setTimeout(logout, ms);
       return () => clearTimeout(t);
     } catch {
-      // token non valido → esci silenziosamente
       logout();
     }
   }, [token]);
 
-  // intercetta 401 → logout (senza rompere UI)
   useEffect(() => {
     const id = api.interceptors.response.use(
       (r) => r,

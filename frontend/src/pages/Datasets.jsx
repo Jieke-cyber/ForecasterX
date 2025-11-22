@@ -34,10 +34,10 @@ export default function Datasets() {
   useEffect(() => { load(); }, []);
 
   const onPlot = (id) => {
-  const GRAFANA = import.meta.env.VITE_GRAFANA_BASE;     // es: http://localhost:3000
+  const GRAFANA = import.meta.env.VITE_GRAFANA_BASE;
   const UID     = import.meta.env.VITE_GRAFANA_DASH_UID;
   const SLUG    = import.meta.env.VITE_GRAFANA_DASH_SLUG;
-  const API     = import.meta.env.VITE_API_BASE;          // es: http://127.0.0.1:8000
+  const API     = import.meta.env.VITE_API_BASE;
 
   const csvUrl = `${API}/public/datasets/${encodeURIComponent(id)}/csv`;
   const qs = new URLSearchParams({ "var-csv_url": csvUrl, from: "now-7d", to: "now" });
@@ -60,7 +60,7 @@ const onImpute = async (id) => {
   if (!id) return setMsg("ID mancante.");
   setMsg(null);
   try {
-    await api.post(`/datasets/${id}/impute-linear`); // o /impute
+    await api.post(`/datasets/${id}/impute-linear`);
     setMsg("Imputazione completata");
     load();
   } catch (e) {
@@ -72,7 +72,7 @@ const onDelete = async (id) => {
   if (!id) return setMsg("ID mancante.");
   setMsg(null);
   try {
-    await api.post(`/datasets/${id}/deleter`); // o /impute
+    await api.post(`/datasets/${id}/deleter`);
     setMsg("Eliminazione completata");
     load();
   } catch (e) {

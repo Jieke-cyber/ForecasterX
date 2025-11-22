@@ -12,7 +12,7 @@ export default function Plots() {
   const load = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get("/plots");   // ✅ endpoint nuovo
+      const { data } = await api.get("/plots");
       setItems(Array.isArray(data) ? data : []);
     } catch (e) {
       setMsg("Errore nel caricamento");
@@ -34,10 +34,10 @@ export default function Plots() {
   useEffect(() => { load(); }, []);
 
   const onPlot = (id) => {
-  const GRAFANA = import.meta.env.VITE_GRAFANA_BASE;     // es: http://localhost:3000
+  const GRAFANA = import.meta.env.VITE_GRAFANA_BASE;
   const UID     = import.meta.env.VITE_GRAFANA_DASH_UID;
   const SLUG    = import.meta.env.VITE_GRAFANA_DASH_SLUG;
-  const API     = import.meta.env.VITE_API_BASE;          // es: http://127.0.0.1:8000
+  const API     = import.meta.env.VITE_API_BASE;
 
   const csvUrl = `${API}/public/plots/forecast/${encodeURIComponent(id)}/csv`;
   const qs = new URLSearchParams({ "var-csv_url": csvUrl, from: "now-7d", to: "now" });
@@ -49,7 +49,7 @@ export default function Plots() {
   if (!id) return setMsg("ID mancante.");
   setMsg(null);
   try {
-    await api.post(`/plots/${id}/delete`); // o /impute
+    await api.post(`/plots/${id}/delete`);
     setMsg("Eliminazione completata");
     load();
   } catch (e) {

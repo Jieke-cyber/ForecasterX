@@ -46,28 +46,20 @@ export default function DatasetPickerModal({
   const [contextLen, setContextLen] = useState(64);
   const [epochs, setEpochs] = useState(5);
   const [selectedIds, setSelectedIds] = useState([]);
-    // 🔑 NUOVO HOOK PER RESETTARE LO STATO
   useEffect(() => {
-    // Se il modale è stato appena aperto, svuota la selezione precedente.
     if (open) {
       setSelectedIds([]);
     }
   }, [open]);
   const isSingleSelection = useMemo(() => {
-      // Le azioni di previsione richiedono un singolo ID
       return actionKey === "zz-save" || actionKey === "ft-save" || actionKey === "pyp-save";
   }, [actionKey]);
 
-  // ❌ Rimuovi questa riga: const [selected, setSelected] = useState(null);
 
-  // 🔑 DEFINISCI LA FUNZIONE (DEVE ESSERE PRESENTE)
   const toggleSelected = (id) => {
       if (isSingleSelection) {
-          // Se è richiesta la selezione singola, imposta la lista all'elemento
-          // cliccato, o la svuota se si riclicca lo stesso elemento.
           setSelectedIds(prev => prev.includes(id) ? [] : [id]);
       } else {
-          // Comportamento standard da checkbox (aggiungi/rimuovi)
           setSelectedIds(prev =>
               prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
           );
@@ -78,7 +70,7 @@ export default function DatasetPickerModal({
     if (actionKey === "ft-train") return { hor: false, ctx: false, ep: true };
     if (actionKey === "zz-save")return { hor: true, ctx: true, ep: false };
     if (actionKey === "pyp-save")return { hor: true, ctx: false, ep: false };
-    return { hor: true, ctx: false, ep: false } // zz-save & ft-save
+    return { hor: true, ctx: false, ep: false }
   }, [actionKey]);
 
   const title = useMemo(() => {
@@ -93,15 +85,12 @@ export default function DatasetPickerModal({
   const pInt = (v, def) => (Number.isFinite(Number(v)) ? parseInt(v, 10) : def);
 
   const handleConfirm = () => {
-    // ❌ VECCHIO: if (!selected) return;
-    if (selectedIds.length === 0) return; // ✅ NUOVO: Controlla se la lista è vuota
+    if (selectedIds.length === 0) return;
 
-    // ... (Logica per H, C, E) ...
 
     if (actionKey === "ft-train") {
-        // Passa la lista (e un ID singolo se il backend FT non è ancora aggiornato)
         onConfirm?.({
-            datasetIds: selectedIds, // ✅ PASSAGGIO DELLA LISTA
+            datasetIds: selectedIds,
             epochs: Math.max(1, pInt(epochs, 5))
         });
     } else {
@@ -109,7 +98,7 @@ export default function DatasetPickerModal({
         const C = Math.max(H, pInt(contextLen, 64));
 
         onConfirm?.({
-            datasetIds: selectedIds, // ✅ PASSAGGIO DELLA LISTA
+            datasetIds: selectedIds,
             horizon: H,
             context_len: C
         });
@@ -151,7 +140,6 @@ export default function DatasetPickerModal({
                                 type="checkbox"
                                 name="ds"
                                 checked={selectedIds.includes(d.id)}
-                                // 🔑 USA la funzione per la selezione multipla
                                 onChange={() => toggleSelected(d.id)}
                             />
                         </td>
@@ -167,8 +155,6 @@ export default function DatasetPickerModal({
               <button onClick={onClose}>Annulla</button>
               <button
                   onClick={handleConfirm}
-                  // ❌ VECCHIO: disabled={!selected}
-                  // ✅ NUOVO: Controlla se ci sono ID selezionati
                   disabled={selectedIds.length === 0}
                   style={{
                       padding: "6px 12px",

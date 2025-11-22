@@ -18,7 +18,7 @@ export default function Models() {
   const [picking, setPicking] = useState(false);
   const [datasets, setDatasets] = useState([]);
   const [loadingDs, setLoadingDs] = useState(false);
-  const [pendingAction, setPendingAction] = useState(null); // { modelKey, actionKey, modelId? }
+  const [pendingAction, setPendingAction] = useState(null);
   const [okText, setOkText] = useState("Conferma");
   const PYPOTS_DESCRIPTIONS = {
   pattern1_TimesNet: "Vendite annuali di un prodotto in crescita con picchi fissi. (Trend lineare + stagionalità annuale)",
@@ -26,7 +26,6 @@ export default function Models() {
   pattern3_TimesNet: "Fatturato con chiusure contabili mensili e picchi ricorrenti in alcuni mesi dell’anno. (Stagionalità mensile + annuale)",
   pattern4_TimesNet: "Crescita utenti di una piattaforma digitale con forte espansione nel tempo e ciclicità stagionale. (Trend esponenziale + stagionalità annuale)",
   pattern5_TimesNet: "Serie di tipo finanziario dove prevale la volatilità e non c’è una stagionalità stabile. (Rumore rosso / alta volatilità)",
-  // aggiungi qui altri base_model se ne hai
 };
 
   useEffect(() => {
@@ -43,7 +42,6 @@ export default function Models() {
   useEffect(() => {
     const rows = [];
 
-    // AutoTS
     rows.push({
       key: "autots",
       name: "AutoTS",
@@ -59,7 +57,6 @@ export default function Models() {
       const base = norm(m.base_model);
       const id = m.id;
 
-      // 🔹 Lag-Llama foundation
       if (kind === "foundation" && base === "lag-llama") {
         rows.push({
           key: `fm:${id}`,
@@ -74,7 +71,6 @@ export default function Models() {
         continue;
       }
 
-      // 🔹 Lag-Llama fine-tuned
       if (kind === "fine_tuned" && base === "lag-llama") {
         rows.push({
           key: `ft:${id}`,
@@ -88,12 +84,10 @@ export default function Models() {
         continue;
       }
 
-      // 🔹 PyPOTS (NUOVO BLOCCO)
       if (kind === "pypots") {
         const base = m.base_model ?? id;
         const modelName = m.name || `PyPOTS (${base})`;
 
-        // descrizione custom, se esiste; altrimenti fallback generico
         const extraDesc = PYPOTS_DESCRIPTIONS[modelName];
 
         const desc =
@@ -113,7 +107,6 @@ export default function Models() {
         continue;
       }
 
-      // Tutto il resto
       other.push(m);
     }
 
@@ -162,7 +155,6 @@ export default function Models() {
     if (actionKey === "ft-train") {
       setOkText("Avvia fine-tuning");
     } else if (actionKey === "pyp-save") {
-      // 🔹 testo del bottone di conferma per PyPOTS
       setOkText("Avvia PyPOTS");
     } else {
       setOkText("Avvia & salva CSV");
@@ -204,11 +196,9 @@ export default function Models() {
         const E = Number.isFinite(Number(epochs)) ? parseInt(epochs, 10) : 5;
         const M = modelName || null;
 
-        // 1. DETERMINAZIONE VARIABILI E AZIONI
         const a = pendingAction;
         const actionKey = a?.actionKey;
 
-        // 🔑 VARIABILE CHIAVE: ID SINGOLO (solo se la lista è lunga esattamente 1)
         const datasetId = Array.isArray(datasetIds) && datasetIds.length === 1
             ? datasetIds[0]
             : null;
@@ -226,29 +216,25 @@ export default function Models() {
                 return;
             }
 
-            // 🛑 2. VALIDAZIONE (Guardrail)
 
-            // Regola #1: Le previsioni richiedono ESATTAMENTE un dataset
             if (isPredictionAction && datasetIds.length !== 1) {
                 setStatus("FAILURE");
                 setMsg(`Per la previsione devi selezionare ESATTAMENTE un dataset.`);
                 return;
             }
 
-            // Regola #2: Gli addestramenti richiedono ALMENO un dataset
             if (isTrainingAction && datasetIds.length === 0) {
                 setStatus("FAILURE");
                 setMsg(`Per l'addestramento devi selezionare almeno un dataset.`);
                 return;
             }
 
-            // 🔹 AUTO TS
             if (a.modelKey === "autots" && isTrainingAction) {
 
                 setMsg(`Auto-addestramento multiserie su ${datasetIds.length} serie in esecuzione…`);
 
                 const {data} = await api.post("/train", {
-                    dataset_ids: datasetIds, // ✅ Usa la LISTA per il backend
+                    dataset_ids: datasetIds,
                     horizon: H,
                     model_name: M,
                 });
@@ -260,13 +246,12 @@ export default function Models() {
                 return;
             }
 
-            // 🔹 Foundation (FINE-TUNING)
             if (a.modelKey.startsWith("fm:") && actionKey === "ft-train" && isTrainingAction) {
                 const id = a.modelId;
                 setMsg(`Avvio del job di fine-tuning su ${datasetIds.length} serie...`);
 
                 const finetunePayload = {
-                    dataset_ids: datasetIds, // ✅ Usa la LISTA per il backend
+                    dataset_ids: datasetIds,
                     horizon: H,
                     context_len: C,
                     epochs: E,
@@ -293,17 +278,15 @@ export default function Models() {
                 return;
             }
 
-            // 🔹 Foundation
             if (a.modelKey.startsWith("fm:")) {
                 const id = a.modelId;
                 if (a.actionKey === "zz-save" && isPredictionAction) {
                     setMsg("Zero-shot → salvataggio CSV…");
                     const {data} = await llamaZeroShotSave({
-                        dataset_id: datasetId, // ✅ ID SINGOLO
+                        dataset_id: datasetId,
                         horizon: H, context_len: C
                     });
 
-                    // Gestiamo la risposta sincrona (come PyPOTS)
                     const n = data?.rows ? data.rows : "?";
                     const plotId = data?.plot_id ? data.plot_id : "?";
 
@@ -314,13 +297,12 @@ export default function Models() {
 
             }
 
-            // 🔹 Fine-tuned Lag-Llama
             if (a.modelKey.startsWith("ft:")) {
                 const id = a.modelId;
                 if (a.actionKey === "ft-save" && isPredictionAction) {
                     setMsg("Predizione FT → salvataggio CSV…");
                     const {data} = await llamaPredictFTSave(id, {
-                        dataset_id: datasetId, // ✅ ID SINGOLO
+                        dataset_id: datasetId,
                         horizon: H,
                         context_len: C,
                     });
@@ -332,15 +314,13 @@ export default function Models() {
                 }
             }
 
-            // 🔹 PyPOTS (NUOVO RAMO)
-            // PyPOTS
             if (a.modelKey.startsWith("pyp:")) {
                 const id = a.modelId;
 
                 if (a.actionKey === "pyp-save" && isPredictionAction) {
                     setMsg("Predizione PyPOTS → salvataggio CSV…");
                     const {data} = await pypotsPredictSave(id, {
-                        dataset_id: datasetId, // ✅ ID SINGOLO
+                        dataset_id: datasetId,
                         horizon: H,
                     });
 

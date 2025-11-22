@@ -1,5 +1,6 @@
 # app/services.py
 import os
+import tempfile
 import uuid
 import io
 from typing import Iterable
@@ -8,8 +9,9 @@ import pandas as pd
 from fastapi import UploadFile, HTTPException
 from sqlalchemy.orm import Session
 
+from FoundationModel.lagllama import load_predictor_from_ckpt, predict_series_with_predictor
 from .utils import download_from_bucket
-from .models import Dataset, ForecastPlot, TrainingRun
+from .models import Dataset, ForecastPlot, TrainingRun, Model
 from .supa import supa, SUPABASE_URL, SUPABASE_BUCKET  # <-- nuovo
 
 BUCKET = os.getenv("SUPABASE_BUCKET", "datasets")
@@ -238,3 +240,127 @@ def _load_dataset_as_df(db: Session, dataset_id: str) -> tuple[pd.DataFrame, Dat
     df = df.sort_values("ds").reset_index(drop=True)
 
     return df, dataset
+
+
+def _run_lagllama_ft_forecast_and_save(
+    db_maker,
+    run_id: str,
+    model_id: str,
+    dataset_id: str,
+    horizon: int,
+    context_len: int,
+):
+    db: Session = db_maker()
+    try:
+
+        run = db.get(TrainingRun, run_id)
+        if not run:
+            return
+        run.status = "RUNNING"
+        db.commit()
+
+        df, ds_row = _load_dataset_as_df(db, dataset_id)
+        if df is None or df.empty:
+            raise RuntimeError("Dataset vuoto o non trovato")
+
+        df = df.sort_values("ds")
+        owner_email = (str(ds_row.owner_email) if ds_row and ds_row.owner_email else "").strip().lower()
+        values = df["value"].to_numpy(dtype=float)
+        start_ts = df["ds"].iloc[0]
+
+        try:
+            freq = pd.infer_freq(pd.to_datetime(df["ds"]).sort_values())
+        except Exception:
+            freq = None
+        freq = freq or "D"
+
+        m = db.query(Model).filter(Model.id == model_id).first()
+        if not m or not m.storage_path:
+            raise RuntimeError("Modello FT senza storage_path")
+
+        blob: bytes = supa().storage.from_(SUPABASE_BUCKET).download(m.storage_path)
+        tmp_ckpt = tempfile.NamedTemporaryFile(delete=False, suffix=".ckpt")
+        tmp_ckpt.write(blob); tmp_ckpt.flush(); tmp_ckpt.close()
+        ckpt_local_path = tmp_ckpt.name
+
+        predictor = load_predictor_from_ckpt(
+            weights_ckpt_path=ckpt_local_path,
+            horizon=horizon,
+            context_len=context_len,
+            freq=freq,
+        )
+
+        yhat = predict_series_with_predictor(
+            predictor,
+            series=values,
+            horizon=horizon,
+            freq=freq,
+            start=start_ts,
+        )
+
+        try:
+            offset = pd.tseries.frequencies.to_offset(freq)
+        except Exception:
+            offset = pd.tseries.frequencies.to_offset("D")
+
+        last_ts = df["ds"].max()
+        future_index = pd.date_range(last_ts + offset, periods=horizon, freq=freq)
+
+        fut = pd.DataFrame({"ds": future_index, "value": yhat[:horizon], "kind": "forecast"})
+        hist = df.assign(kind="history")
+        combined = pd.concat([hist, fut], ignore_index=True)
+
+        csv_bytes = combined.to_csv(index=False).encode("utf-8")
+        client = supa()
+        plot_id = str(uuid.uuid4())
+        safe_owner = (owner_email or "public").replace("@", "_at_")
+        object_key = f"{safe_owner}/{dataset_id}/{plot_id}.csv"
+
+        client.storage.from_(SUPABASE_BUCKET).upload(
+            path=object_key,
+            file=csv_bytes,
+            file_options={"content-type": "text/csv", "upsert": "true"},
+        )
+
+        db.add(ForecastPlot(
+            id=plot_id,
+            training_run_id=run_id,
+            name=f"{getattr(ds_row, 'name', dataset_id)} (Lag-Llama FT forecast)",
+            path=object_key,
+            owner_email=owner_email,
+        ))
+
+        run.status = "SUCCESS"
+        meta = (run.metrics_json or {})
+        meta.update({
+            "note": "Lag-Llama fine-tuned",
+            "horizon": horizon,
+            "context_len": context_len,
+            "freq": freq,
+            "model_id_used": model_id,
+        })
+        run.metrics_json = meta
+        db.commit()
+
+    except Exception as e:
+        run = db.get(TrainingRun, run_id)
+        if run:
+            run.status = "FAILURE"
+            run.error = str(e)
+            db.commit()
+        raise
+    finally:
+        db.close()
+
+
+def _create_new_dataset_row(db: Session, name: str, path: str, owner_email: str) -> Dataset:
+    new_id = str(uuid.uuid4())
+    new_ds = Dataset(
+        id=new_id,
+        name=name,
+        path=path,
+        owner_email=owner_email,
+    )
+    db.add(new_ds)
+    db.commit()
+    return new_ds
