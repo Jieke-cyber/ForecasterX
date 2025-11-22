@@ -750,12 +750,13 @@ def lag_llama_finetune(
     return {"job_id": run.id, "status": run.status}
 
 
+
 @app.post("/lag-llama-ft/{model_id}/predict/save")
 def lag_llama_ft_predict_and_save(
-    model_id: str,
-    payload: PredictFTSaveIn,
-    background: BackgroundTasks,
-    db: Session = Depends(get_db),
+        model_id: str,
+        payload: PredictFTSaveIn,
+        background: BackgroundTasks,
+        db: Session = Depends(get_db),
 ):
     m = db.query(Model).filter(Model.id == model_id).first()
     if not m:
@@ -763,27 +764,17 @@ def lag_llama_ft_predict_and_save(
     if (m.kind or "").lower() != "fine_tuned" or (m.base_model or "").lower() != "lag-llama":
         raise HTTPException(400, "Il modello non è un Lag-Llama fine-tuned")
 
-    run_id = str(uuid.uuid4())
-    db.add(TrainingRun(
-        id=run_id,
-        dataset_id=str(payload.dataset_id),
-        status="PENDING",
-        metrics_json={},
-        error=None,
-        model_id_used=model_id,
-    ))
-    db.commit()
-
     background.add_task(
         _run_lagllama_ft_forecast_and_save,
         SessionLocal,
-        run_id,
+
         model_id,
         str(payload.dataset_id),
         int(payload.horizon),
         int(payload.context_len),
     )
-    return {"run_id": run_id}
+
+    return {"message": "Previsione avviata e salvataggio in corso."}
 @app.get("/models")
 def list_models(
     db: Session = Depends(get_db),

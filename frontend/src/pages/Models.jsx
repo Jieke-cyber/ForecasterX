@@ -299,17 +299,16 @@ export default function Models() {
 
             if (a.modelKey.startsWith("ft:")) {
                 const id = a.modelId;
-                if (a.actionKey === "ft-save" && isPredictionAction) {
+                if (a.actionKey === "ft-save") {
                     setMsg("Predizione FT → salvataggio CSV…");
-                    const {data} = await llamaPredictFTSave(id, {
+                    const { data } = await llamaPredictFTSave(id, {
                         dataset_id: datasetId,
                         horizon: H,
                         context_len: C,
                     });
-                    const rid = data?.run_id;
-                    if (!rid) throw new Error("Risposta senza run_id");
-                    setRunId(rid);
-                    await pollRun(rid);
+                    setStatus("SUCCESS");
+                    setMsg(`Predizione avviata. Il file CSV verrà salvato nello storage.`);
+
                     return;
                 }
             }
