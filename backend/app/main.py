@@ -30,7 +30,6 @@ from .schemas import JobStatus, ZeroShotPredictIn, FinetuneIn, PredictFTSaveIn, 
 from .services import save_csv, delete_csv, delete_single_plot, delete_training_run, _load_dataset_as_df, \
     _run_lagllama_ft_forecast_and_save, _create_new_dataset_row
 from .supa import SUPABASE_URL, SUPABASE_BUCKET, supa
-from .models import User
 from .auth_utils import hash_password, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 from FoundationModel.lagllama import predict_series
 from .models_runtime.pypots_runtime import (
@@ -288,87 +287,6 @@ def list_datasets(
         for r in rows
     ]
 
-@app.get("/datasets/{dataset_id}/data")
-def get_dataset_data(dataset_id: str, db: Session = Depends(get_db)):
-    """
-    Scarica il CSV dal bucket dei dataset, lo normalizza a ds,value
-    e lo restituisce pronto per il grafico.
-    """
-    ds = db.get(Dataset, dataset_id)
-    if not ds:
-        raise HTTPException(404, "Dataset non trovato")
-
-    client = supa()
-    try:
-        file_bytes = client.storage.from_(os.getenv("SUPABASE_BUCKET")).download(ds.path)
-    except Exception as e:
-        raise HTTPException(500, f"Errore download CSV da storage: {e}")
-
-    try:
-        df = pd.read_csv(io.BytesIO(file_bytes))
-    except Exception as e:
-        raise HTTPException(400, f"CSV non leggibile: {e}")
-
-    if {"ds", "value"}.issubset(df.columns):
-        df = df[["ds", "value"]].copy()
-    else:
-        if df.shape[1] < 2:
-            raise HTTPException(400, "CSV deve avere almeno due colonne (data, valore)")
-        df = df.iloc[:, :2].copy()
-        df.columns = ["ds", "value"]
-
-    df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
-    df = df.dropna(subset=["ds"]).sort_values("ds")
-
-    return [
-        {"ds": row.ds.isoformat(), "value": float(row.value)}
-        for _, row in df.iterrows()
-    ]
-
-
-
-
-@app.get("/plots/{plot_id}/data")
-def get_plot_data(plot_id: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-    """
-    Scarica il CSV del forecast (quello con ds,value,kind) e lo restituisce al frontend.
-    """
-    plot = db.get(ForecastPlot, plot_id)
-    if not plot:
-        raise HTTPException(404, "Plot non trovato")
-
-    owner_email = str(current_user.email).strip().lower()
-    if plot.owner_email != owner_email:
-        raise HTTPException(403, "Forbidden")
-
-    client = supa()
-    try:
-        file_bytes = client.storage.from_(os.getenv('SUPABASE_BUCKET_PLOTS')).download(plot.path)
-    except Exception as e:
-        raise HTTPException(500, f"Errore download forecast da storage: {e}")
-
-    try:
-        df = pd.read_csv(io.BytesIO(file_bytes))
-    except Exception as e:
-        raise HTTPException(400, f"CSV forecast non leggibile: {e}")
-
-    if "ds" not in df.columns or "value" not in df.columns:
-        raise HTTPException(400, "CSV forecast non ha le colonne attese")
-
-    df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
-    df = df.dropna(subset=["ds"]).sort_values("ds")
-
-    if "kind" not in df.columns:
-        df["kind"] = "history"
-
-    return [
-        {
-            "ds": row.ds.isoformat(),
-            "value": float(row.value),
-            "kind": row.kind,
-        }
-        for _, row in df.iterrows()
-    ]
 
 from fastapi import Query
 
@@ -657,13 +575,6 @@ def api_delete_training_run(run_id: str, db: Session = Depends(get_db), current_
     delete_training_run(db, run_id, current_user.email)
     return
 
-
-def _load_df(db: Session, dataset_id: str):
-    ds = db.get(Dataset, dataset_id)
-    if not ds: raise HTTPException(404, "Dataset non trovato")
-    df = pd.read_csv(ds.path)
-    df["ds"] = pd.to_datetime(df["ds"])
-    return df[["ds","value"]], ds
 
 def _infer_freq(ds_col: pd.Series) -> str:
     try: return pd.infer_freq(ds_col.sort_values()) or "D"

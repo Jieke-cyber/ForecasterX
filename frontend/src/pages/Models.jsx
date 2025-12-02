@@ -343,7 +343,7 @@ export default function Models() {
 
   return (
     <div style={wrap}>
-      <h1>Modelli</h1>
+      <h1>Models</h1>
 
       {msg && (
         <div

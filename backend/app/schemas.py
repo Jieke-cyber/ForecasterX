@@ -11,11 +11,6 @@ class JobStatus(BaseModel):
     status: str
     result: Optional[JobResult] = None
 
-class RecentPlot(BaseModel):
-    id: str
-    plot_json: Dict[str, Any]
-    created_at: str
-
 
 class ZeroShotPredictIn(BaseModel):
     dataset_id: str

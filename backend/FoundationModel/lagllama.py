@@ -128,7 +128,7 @@ def _extract_model_kwargs(ckpt: dict) -> dict:
 
 from inspect import signature
 
-def _build_estimator(ckpt_path: str, horizon: int, context_len: int, freq: str) -> LagLlamaEstimator:
+def _build_estimator(ckpt_path: str, horizon: int, context_len: int) -> LagLlamaEstimator:
     ckpt = _load_ckpt(ckpt_path)
     model_kwargs = _extract_model_kwargs(ckpt)
 
@@ -239,16 +239,6 @@ def predict_series(
         yhat = np.concatenate([yhat, pad])
     return yhat[:horizon]
 
-def _normalize_time_feat_keys(model_kwargs: dict) -> dict:
-    """Rende compatibili 'time_feat' e 'time_features' con la firma del tuo LagLlamaEstimator."""
-    params = signature(LagLlamaEstimator).parameters
-    mk = dict(model_kwargs or {})
-    if "time_feat" in mk and "time_feat" not in params and "time_features" in params:
-        mk["time_features"] = mk.pop("time_feat")
-    if "time_features" in mk and "time_features" not in params and "time_feat" in params:
-        mk["time_feat"] = mk.pop("time_features")
-    return mk
-
 def build_finetune_estimator_from_foundation(
     *,
     foundation_ckpt_path: str | None,
@@ -312,8 +302,6 @@ def build_finetune_estimator_from_foundation(
 
     return LagLlamaEstimator(**est_kwargs)
 
-
-
 def _latest_ckpt_path(root: str) -> str | None:
     """
     Cerca il checkpoint più recente sotto <root>/**/checkpoints/*.ckpt
@@ -332,6 +320,7 @@ def _latest_ckpt_path(root: str) -> str | None:
     return candidates[0]
 
 
+
 def finetune_and_dump_ckpt(
         *,
         df_long: pd.DataFrame,
@@ -348,7 +337,6 @@ def finetune_and_dump_ckpt(
     Esegue FINE-TUNING MULTISERIE e ritorna il path del checkpoint Lightning (.ckpt).
     """
     import tempfile, glob, os, pathlib
-    import pandas as pd
     import numpy as np
     from gluonts.dataset.pandas import PandasDataset
 
@@ -430,7 +418,6 @@ def finetune_and_dump_ckpt(
     return candidates[0]
 
 
-
 def load_predictor_from_ckpt(
     weights_ckpt_path: str,
     horizon: int,
@@ -444,7 +431,7 @@ def load_predictor_from_ckpt(
     """
     Ricrea l'estimator dal ckpt (completo) e costruisce il Predictor per l'inferenza.
     """
-    est = _build_estimator(weights_ckpt_path, horizon, context_len, freq)
+    est = _build_estimator(weights_ckpt_path, horizon, context_len)
     try:
         pred = est.create_predictor(
             transformation=est.create_transformation(),
@@ -461,7 +448,9 @@ def load_predictor_from_ckpt(
     return pred
 
 
+
 from gluonts.model.predictor import Predictor as _GluonPredictor
+
 
 def predict_series_with_predictor(
     predictor: _GluonPredictor,
@@ -491,3 +480,13 @@ def predict_series_with_predictor(
     if yhat.shape[0] < horizon:
         yhat = np.concatenate([yhat, np.full(horizon - yhat.shape[0], np.nan)])
     return yhat[:horizon]
+
+def _normalize_time_feat_keys(model_kwargs: dict) -> dict:
+    """Rende compatibili 'time_feat' e 'time_features' con la firma del tuo LagLlamaEstimator."""
+    params = signature(LagLlamaEstimator).parameters
+    mk = dict(model_kwargs or {})
+    if "time_feat" in mk and "time_feat" not in params and "time_features" in params:
+        mk["time_features"] = mk.pop("time_feat")
+    if "time_features" in mk and "time_features" not in params and "time_feat" in params:
+        mk["time_feat"] = mk.pop("time_features")
+    return mk
