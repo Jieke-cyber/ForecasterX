@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pandas as pd
 import torch
+from pytorch_lightning.callbacks import EarlyStopping
 
 try:
     from torch.serialization import add_safe_globals
@@ -248,6 +249,7 @@ def build_finetune_estimator_from_foundation(
     lr: float = 1e-4,
     aug_prob: float = 0.2,
     max_epochs: int = 50,
+    patience: int = 5,
     default_root_dir: str | None = None,
 ) -> LagLlamaEstimator:
     """
@@ -287,7 +289,16 @@ def build_finetune_estimator_from_foundation(
         except Exception:
             pass
 
-    tkwargs = {"max_epochs": int(max_epochs), "enable_checkpointing": True}
+    tkwargs = {"max_epochs": int(max_epochs), "enable_checkpointing": True,
+               "callbacks": [
+               # Monitora la 'val_loss' (o la metrica di validazione che usi)
+               # min_delta=0.0: qualsiasi miglioramento conta
+               # patience=patience: aspetta X epoche prima di fermarsi
+               # verbose=True: stampa nel log quando si ferma
+               # mode='min': ci aspettiamo che la loss diminuisca
+               EarlyStopping(monitor="val_loss", min_delta=0.0, patience=patience, verbose=True, mode="min")
+    ]
+    }
     if default_root_dir:
         tkwargs["default_root_dir"] = default_root_dir
     if "trainer_kwargs" in params:
